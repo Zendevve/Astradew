@@ -39,7 +39,6 @@ rebuilds and restarts it.
 | `wails3 task run` | Runs the last built binary without rebuilding. |
 | `wails3 generate bindings -ts -i` | Regenerates `frontend/bindings` after changing a bound Go service. |
 | `go test ./...` | Backend tests. They run against the service layer directly, with no framework runtime and no webview, so they work on a fresh clone. |
-| `npm test --prefix frontend` | Frontend tests (none yet; the seam is established in Phase 0's later slices). |
 
 ## Layout
 
@@ -47,7 +46,7 @@ rebuilds and restarts it.
 main.go                  entry point; must stay at the root because it embeds frontend/dist
 internal/                every other Go package
   app/                   the bound service reporting application identity
-  buildinfo/             product name, identifier and version
+  buildinfo/             product name, description and version
 frontend/
   src/                   React + TypeScript interface
   bindings/              generated from the Go services; committed
@@ -65,4 +64,4 @@ it at link time:
 go build -ldflags "-X github.com/Zendevve/astradew/internal/buildinfo.Version=1.2.3"
 ```
 
-A build that no release pipeline produced reports `0.0.0-dev`.
+A build without a release override reports `0.0.0`.

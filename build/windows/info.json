@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "0.0.0-dev"
+		"file_version": "0.0.0"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "0.0.0-dev",
+			"ProductVersion": "0.0.0",
 			"CompanyName": "Zendevve",
 			"FileDescription": "Stardew Valley mod environment manager",
-			"LegalCopyright": "© 2026, My Company",
+			"LegalCopyright": "© 2026, Zendevve",
 			"ProductName": "Astradew",
-			"Comments": "This is a comment"
+			"Comments": "Astradew manages Stardew Valley modded play environments built around SMAPI."
 		}
 	}
 }
