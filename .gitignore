@@ -1,6 +1,10 @@
 .task
 bin
-frontend/dist
+# The frontend build output is generated, but the directory itself must exist
+# because main.go embeds it: a bare clone has to be able to run `go build` and
+# `go vet ./...` before the frontend has ever been built.
+frontend/dist/*
+!frontend/dist/.gitkeep
 frontend/node_modules
 build/linux/appimage/build
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe

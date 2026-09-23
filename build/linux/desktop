@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Astradew
+Comment=Stardew Valley mod environment manager
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/astradew.exe %u
+Terminal=false
+Type=Application
+Icon=astradew.exe
+Categories=Utility;
+StartupWMClass=astradew.exe
+
+ 

@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.0.0-dev"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.0.0-dev",
+			"CompanyName": "Zendevve",
+			"FileDescription": "Stardew Valley mod environment manager",
+			"LegalCopyright": "© 2026, My Company",
+			"ProductName": "Astradew",
+			"Comments": "This is a comment"
+		}
+	}
+}
