@@ -1,0 +1,3 @@
+# Preserve a Package's folder names when deploying
+
+A Deployed Copy keeps the folder names the Package shipped, sanitised only where the platform rejects them (reserved Windows device names, illegal characters, trailing dots and spaces), with a deterministic suffix on collision and case-insensitive collision detection where the filesystem is case-insensitive. Deriving names from the Manifest or Unique ID would be tidier, but players recognise shipped folder names from mod documentation and SMAPI logs, and import fidelity matters more than tidiness. A folder name is never identity: the Unique ID is.
