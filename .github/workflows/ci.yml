@@ -1,0 +1,113 @@
+# Astradew continuous integration (ticket #12).
+#
+# A pipeline that fails when the foundation breaks. Every gate below runs the
+# repo's own suites in full with no test-name allowlists, so later tickets'
+# tests are picked up automatically without workflow edits.
+#
+# Headless by design: no job needs a Stardew Valley installation, a network
+# service, or a developer machine. `go test ./internal/...` needs no display,
+# vitest runs under jsdom, and the frontend + wails3 steps are compile-only —
+# the built binary is never executed here and the e2e harness (ticket #11)
+# never runs in CI.
+#
+# macOS is deliberately NOT in the matrix; it joins at packaging/notarisation.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: ci (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux webview system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            gcc \
+            g++ \
+            pkg-config \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            git \
+            ca-certificates
+          # Package list mirrors the Linux dependencies documented by Wails v3
+          # itself (test/docker/Dockerfile.linux-* and
+          # internal/commands/build_assets/docker/Dockerfile.cross in
+          # github.com/wailsapp/wails/v3@v3.0.0-beta.25): GTK4/WebKitGTK 6.0
+          # is the default build target, GTK3/WebKit2GTK 4.1 the legacy one.
+
+      - name: Assert WebView2 runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # WebView2 ships with Windows 10/11 and the windows-latest runner
+          # image — assert its presence, never install it here.
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          if (-not (Test-Path $key)) { throw "WebView2 Evergreen runtime not found at $key" }
+          (Get-ItemProperty $key).pv
+
+      - name: Install wails3 CLI
+        # Pinned to v3.0.0-beta.25 to match go.mod exactly.
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.25
+
+      - name: gofmt check
+        # gofmt -l must print nothing for main.go + internal/.
+        # bash runs on both runners (Git Bash on windows-latest).
+        shell: bash
+        run: test -z "$(gofmt -l main.go internal/)"
+
+      - name: go vet
+        # NOT ./... : build/ios carries a pre-existing main issue, so it stays
+        # excluded exactly the way the repo already excludes it.
+        run: go vet . ./internal/...
+
+      - name: go test
+        run: go test ./internal/... -count=1
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: TypeScript check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Frontend tests
+        working-directory: frontend
+        run: npx vitest run
+
+      - name: Frontend production build
+        working-directory: frontend
+        run: npm run build
+
+      - name: wails3 production build
+        run: wails3 build

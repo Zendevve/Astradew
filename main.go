@@ -10,6 +10,8 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -69,9 +71,25 @@ func main() {
 	}
 
 	svc := app.NewWithPathsAndStore(buildinfo.Name, buildinfo.Version, paths, db)
+	// Remote debugging is strictly opt-in through the environment and exists
+	// for the end-to-end harness only: ordinary launches leave the debugger
+	// port closed. WebView2 honours additional browser arguments passed here
+	// in code, while Wails clears the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+	// environment override at startup — so there is no way to enable this
+	// without this explicit block. The value is restricted to a bare port
+	// number so the variable cannot inject further browser arguments.
+	windows := application.WindowsOptions{}
+	if arg := os.Getenv("ASTRADEW_REMOTE_DEBUGGING_PORT"); arg != "" {
+		if port, err := strconv.Atoi(arg); err == nil && port > 0 && port < 65536 {
+			windows.AdditionalBrowserArgs = []string{"--remote-debugging-port=" + strconv.Itoa(port)}
+		} else {
+			log.Printf("ignoring invalid ASTRADEW_REMOTE_DEBUGGING_PORT %q: want a TCP port number", arg)
+		}
+	}
 	astradew := application.New(application.Options{
 		Name:        buildinfo.Name,
 		Description: buildinfo.Description,
+		Windows:     windows,
 		Services: []application.Service{
 			application.NewServiceWithOptions(svc, application.ServiceOptions{MarshalError: apperror.MarshalError}),
 		},
