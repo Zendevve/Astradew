@@ -45,7 +45,7 @@ export const ROUTES: RouteDef[] = [
     label: "Health",
     heading: "Health",
     empty:
-      "No health information. Mod health checks run once a game with mods is configured.",
+      "No mod health information. The backend report below shows what Astradew itself can observe; mod health checks run once a game with mods is configured.",
   },
   {
     path: "/downloads",

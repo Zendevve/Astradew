@@ -13,13 +13,44 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as approot$0 from "../approot/models.js";
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as $models from "./models.js";
+
+/**
+ * Health reports only what the backend can observe: the constructed identity,
+ * per-directory writability under the resolved root, live database state
+ * through the open handle, the recorded startup steps, observed findings,
+ * and the not-yet-available capabilities.
+ */
+export function Health(): $CancellablePromise<$models.HealthReport> {
+    return $Call.ByID(826857324);
+}
 
 /**
  * Info returns the application's identity.
  */
 export function Info(): $CancellablePromise<$models.Info> {
     return $Call.ByID(1279469806);
+}
+
+/**
+ * NoteLoggerCreated records the logger step. main.go calls it after creating
+ * the logger, so Health never claims a step that did not run.
+ */
+export function NoteLoggerCreated(): $CancellablePromise<void> {
+    return $Call.ByID(3875210530);
+}
+
+/**
+ * Paths returns the resolved application data layout: the single Astradew/
+ * root under the OS data directory and every product subdirectory. The
+ * frontend renders it so the resolved locations stay visible.
+ */
+export function Paths(): $CancellablePromise<approot$0.Paths> {
+    return $Call.ByID(3879430146);
 }
 
 /**

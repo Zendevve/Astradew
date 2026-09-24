@@ -29,6 +29,27 @@ const (
 	// demo probe. It exists so tests can prove a code survives the
 	// Go-to-TypeScript marshalling boundary intact.
 	CodeProbeFailure Code = "PROBE_FAILURE"
+
+	// CodeAppRootUnusable is returned when the Astradew application data
+	// root cannot be created or proven writable (unwritable location, or a
+	// file where a directory belongs). It is recoverable: the user can fix
+	// permissions or free the path and retry. Details name the path and
+	// the reason.
+	CodeAppRootUnusable Code = "APPROOT_UNUSABLE"
+
+	// CodeStoreOpenFailed is returned when the SQLite database cannot be
+	// opened or its required PRAGMAs cannot be established. It is
+	// recoverable: the user can restore a backup or move the file aside
+	// and retry. Details name the database path and the reason.
+	CodeStoreOpenFailed Code = "STORE_OPEN_FAILED"
+
+	// CodeStoreMigrationFailed is returned when a numbered migration cannot
+	// be applied. The failed migration rolls back fully and the
+	// pre-migration backup is kept. It is recoverable: the user can restore
+	// the newest backup or start fresh while preserving the old file.
+	// Details name the failing version, the database path, and both repair
+	// actions with concrete paths.
+	CodeStoreMigrationFailed Code = "STORE_MIGRATION_FAILED"
 )
 
 // AppError is a typed service failure. It crosses to TypeScript as the cause

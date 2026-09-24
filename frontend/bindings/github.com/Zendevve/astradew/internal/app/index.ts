@@ -7,5 +7,11 @@ export {
 };
 
 export type {
-    Info
+    HealthDatabase,
+    HealthDirectory,
+    HealthFinding,
+    HealthReport,
+    HealthUnavailable,
+    Info,
+    InitStep
 } from "./models.js";

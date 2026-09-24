@@ -5,11 +5,11 @@ import {
   type Info,
 } from "../bindings/github.com/Zendevve/astradew/internal/app";
 import { appErrorCode, appErrorPayload } from "./errors";
-
 import Button from "./ui/Button";
 import NavLink from "./ui/NavLink";
 import EmptyState from "./ui/EmptyState";
 import StatusText from "./ui/StatusText";
+import HealthSection from "./pages/HealthSection";
 import { ROUTES } from "./pages/routes";
 
 /** State of the failure-path demo probe. Idle until the user runs it. */
@@ -163,7 +163,21 @@ export default function App() {
         </div>
       </header>
       <main id="main-content">
-        <EmptyState title={active.heading} description={active.empty} />
+        {active.path === "/health" ? (
+          <>
+            <EmptyState title={active.heading} description={active.empty} />
+            <HealthSection />
+          </>
+        ) : (
+          <EmptyState title={active.heading} description={active.empty} />
+        )}
+        <section className="app-paths" aria-label="Application data">
+          <h2>Application data</h2>
+          <StatusText icon="○">
+            Locations moved to the Health view: open Health in the primary
+            navigation to see every resolved path with its writability state.
+          </StatusText>
+        </section>
         <section className="diagnostics" aria-label="Diagnostics">
           <h2>Diagnostics</h2>
           <Button onClick={runProbe} disabled={probe.status === "running"}>

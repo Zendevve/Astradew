@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -9,11 +9,70 @@ import { ROUTES } from "../pages/routes";
 // Guarantees the bindings stub even if this file runs without the setup
 // file's global mock; same factory, so behaviour is identical.
 vi.mock("../../bindings/github.com/Zendevve/astradew/internal/app", () => ({
-  ApplicationService: { Info: vi.fn(), ProbeFailure: vi.fn() },
+  ApplicationService: {
+    Info: vi.fn(),
+    ProbeFailure: vi.fn(),
+    Paths: vi.fn(),
+    Health: vi.fn(),
+    NoteLoggerCreated: vi.fn(),
+  },
 }));
 
 const infoMock = vi.mocked(ApplicationService.Info);
 const probeMock = vi.mocked(ApplicationService.ProbeFailure);
+const pathsMock = vi.mocked(ApplicationService.Paths);
+const healthMock = vi.mocked(ApplicationService.Health);
+
+const dataRoot = "C:\\Users\\test\\AppData\\Local\\Astradew";
+const healthyReport = {
+  name: "Astradew",
+  version: "0.0.0",
+  dataRoot,
+  directories: [
+    { name: "Root", path: dataRoot, writable: true },
+    { name: "Database", path: `${dataRoot}\\database`, writable: true },
+    { name: "Library", path: `${dataRoot}\\library`, writable: true },
+    { name: "Profiles", path: `${dataRoot}\\profiles`, writable: true },
+    { name: "Backups", path: `${dataRoot}\\backups`, writable: true },
+    { name: "Cache", path: `${dataRoot}\\cache`, writable: true },
+    { name: "Logs", path: `${dataRoot}\\logs`, writable: true },
+    { name: "Temporary files", path: `${dataRoot}\\temp`, writable: true },
+  ],
+  database: {
+    path: `${dataRoot}\\database\\astradew.db`,
+    version: 1,
+    healthy: true,
+    state: "open",
+  },
+  initialisation: [
+    { name: "Resolve application data root", ok: true, message: "resolved" },
+    { name: "Open database", ok: true, message: "opened at schema version 1" },
+  ],
+  findings: [],
+  unavailable: [
+    { name: "Game detection", status: "unavailable", reason: "not yet implemented in this phase" },
+    { name: "SMAPI detection", status: "unavailable", reason: "not yet implemented in this phase" },
+    { name: "Mod health", status: "unavailable", reason: "not yet implemented in this phase" },
+  ],
+};
+const dataPaths = {
+  root: dataRoot,
+  database: `${dataRoot}\\database`,
+  library: `${dataRoot}\\library`,
+  profiles: `${dataRoot}\\profiles`,
+  backups: `${dataRoot}\\backups`,
+  cache: `${dataRoot}\\cache`,
+  logs: `${dataRoot}\\logs`,
+  temp: `${dataRoot}\\temp`,
+};
+
+// resetAllMocks wipes stub implementations, and App calls Paths on every
+// mount while the Health view calls Health, so each test starts with
+// resolving stubs; individual tests override them to reject on demand.
+beforeEach(() => {
+  pathsMock.mockResolvedValue(dataPaths);
+  healthMock.mockResolvedValue(healthyReport);
+});
 
 afterEach(() => {
   cleanup();
@@ -125,6 +184,118 @@ describe("application shell", () => {
     render(<App />);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("connection refused");
+  });
+});
+
+describe("health view", () => {
+  it("health route renders real backend values in every section", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    window.location.hash = "#/health";
+    render(<App />);
+    await screen.findByText("Astradew");
+
+    const dataSection = await screen.findByRole("region", {
+      name: "Data locations",
+    });
+    expect(healthMock).toHaveBeenCalledTimes(1);
+    for (const dir of healthyReport.directories) {
+      expect(within(dataSection).getByText(dir.path)).not.toBeNull();
+    }
+    expect(within(dataSection).getAllByText("Writable.")).toHaveLength(
+      healthyReport.directories.length,
+    );
+
+    const dbSection = screen.getByRole("region", { name: "Database" });
+    expect(dbSection.textContent).toContain(
+      healthyReport.database.path,
+    );
+    expect(dbSection.textContent).toContain("schema version 1");
+
+    const initSection = screen.getByRole("region", {
+      name: "Initialisation",
+    });
+    expect(initSection.textContent).toContain("Resolve application data root");
+    expect(initSection.textContent).toContain("Open database");
+
+    const unavailableSection = screen.getByRole("region", {
+      name: "Not yet available",
+    });
+    for (const entry of healthyReport.unavailable) {
+      const item = within(unavailableSection).getByText(
+        new RegExp(entry.name),
+      );
+      expect(item.textContent).toContain("unavailable");
+      expect(item.textContent).not.toMatch(/healthy/i);
+    }
+    expect(screen.queryByRole("region", { name: "Findings" })).toBeNull();
+  });
+
+  it("broken directory shows the backend action text", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    const blocked = `${dataRoot}\\cache`;
+    healthMock.mockResolvedValue({
+      ...healthyReport,
+      directories: healthyReport.directories.map((dir) =>
+        dir.path === blocked ? { ...dir, writable: false } : dir,
+      ),
+      findings: [
+        {
+          severity: "error",
+          what: `directory "Cache" at ${blocked} is not usable`,
+          why: "Astradew keeps Cache data there",
+          action: `Fix permissions on ${blocked} and restart`,
+        },
+      ],
+    });
+    window.location.hash = "#/health";
+    render(<App />);
+    await screen.findByText("Astradew");
+
+    const findings = await screen.findByRole("region", { name: "Findings" });
+    expect(findings.textContent).toContain(blocked);
+    expect(findings.textContent).toContain("Fix permissions on");
+    const dataSection = screen.getByRole("region", {
+      name: "Data locations",
+    });
+    expect(dataSection.textContent).toContain("Not writable.");
+  });
+
+  it("says it is reading, then shows an alert on backend refusal", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    let rejectHealth!: (reason: unknown) => void;
+    const deferred = new Promise<never>((_, reject) => {
+      rejectHealth = reject;
+    });
+    healthMock.mockReturnValue(deferred as never);
+    window.location.hash = "#/health";
+    render(<App />);
+    await screen.findByText("Astradew");
+    expect(screen.getByText(/reading health/i)).not.toBeNull();
+
+    rejectHealth(new Error("connection refused"));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Health is not available");
+    expect(alert.textContent).toContain("connection refused");
+  });
+
+  it("unavailable database reports state instead of healthy", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    healthMock.mockResolvedValue({
+      ...healthyReport,
+      database: {
+        path: "",
+        version: 0,
+        healthy: false,
+        state: "unavailable: service constructed without a database handle",
+      },
+    });
+    window.location.hash = "#/health";
+    render(<App />);
+    await screen.findByText("Astradew");
+
+    const dbSection = await screen.findByRole("region", { name: "Database" });
+    expect(dbSection.textContent).toContain("unavailable");
+    expect(dbSection.textContent).not.toMatch(/schema version 1/);
   });
 });
 
