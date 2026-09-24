@@ -6,12 +6,16 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/Zendevve/astradew/internal/apperror"
 	"github.com/Zendevve/astradew/internal/approot"
+	"github.com/Zendevve/astradew/internal/settings"
 	"github.com/Zendevve/astradew/internal/store"
+	"github.com/Zendevve/astradew/internal/tasks"
 )
 
 // Info is the identity of the running application as the interface sees it.
@@ -245,4 +249,98 @@ func probeDirWritable(dir string) error {
 		return err
 	}
 	return os.Remove(name)
+}
+
+// SettingView is one registry setting with its current value: what the
+// /settings view renders per row. Value holds a JSON scalar (string, bool,
+// or number); IsDefault reports whether it equals the declared default.
+type SettingView struct {
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Value       any    `json:"value"`
+	IsDefault   bool   `json:"isDefault"`
+	Description string `json:"description"`
+}
+
+// settingsService resolves the settings service over the open handle, or
+// refuses with recoverable SETTING_UNAVAILABLE when constructed without a
+// database — never a fabricated store.
+func (s *ApplicationService) settingsService() (*settings.Service, error) {
+	if s.db == nil {
+		return nil, apperror.NewRecoverable(apperror.CodeSettingUnavailable, "settings unavailable", "settings unavailable: service constructed without a database handle")
+	}
+	return settings.New(s.db.DB()), nil
+}
+
+// Settings lists every registry setting with its current value and whether
+// it is still the declared default.
+func (s *ApplicationService) Settings() ([]SettingView, error) {
+	svc, err := s.settingsService()
+	if err != nil {
+		return nil, err
+	}
+	values, err := svc.GetAll(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SettingView, 0, len(values))
+	for _, value := range values {
+		out = append(out, SettingView{
+			Name:        value.Name,
+			Kind:        string(value.Kind),
+			Value:       value.Value,
+			IsDefault:   value.IsDefault,
+			Description: value.Description,
+		})
+	}
+	return out, nil
+}
+
+// GetSetting returns the current value of one registry setting: the stored
+// JSON scalar, or the declared default when never written. An unknown key
+// refuses with SETTING_UNKNOWN.
+func (s *ApplicationService) GetSetting(key string) (any, error) {
+	svc, err := s.settingsService()
+	if err != nil {
+		return nil, err
+	}
+	return svc.Get(context.Background(), key)
+}
+
+// SetSetting validates value against the key's declaration and stores it. An
+// unknown key refuses with SETTING_UNKNOWN; an invalid value refuses with
+// recoverable SETTING_INVALID, naming the key, the reason, and the preserved
+// previous value. The stored value is left unchanged on any refusal.
+func (s *ApplicationService) SetSetting(key string, value any) error {
+	svc, err := s.settingsService()
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return apperror.NewRecoverable(apperror.CodeSettingInvalid, fmt.Sprintf("invalid value for setting %q", key), fmt.Sprintf("setting %q: value is not JSON-encodable: %s", key, err))
+	}
+	return svc.Set(context.Background(), key, encoded)
+}
+
+// Task returns the durable record for id, re-read live from SQLite
+// through the open handle (ADR 0006: rows are the source of truth, Wails
+// events are live hints never replayed). An unknown id reports
+// TASK_NOT_FOUND; a service with no open store reports the store
+// unavailable instead of fabricating a record.
+func (s *ApplicationService) Task(id string) (tasks.Task, error) {
+	if s.db == nil {
+		return tasks.Task{}, apperror.New(apperror.CodeStoreOpenFailed, "task store unavailable: no open database")
+	}
+	return tasks.New(s.db.DB()).Get(context.Background(), id)
+}
+
+// RecentTasks returns recent task records newest-first, re-read live from
+// SQLite like Task. The frontend calls it on mount so the visible run
+// always reflects the durable rows, never a replayed event.
+func (s *ApplicationService) RecentTasks() ([]tasks.Task, error) {
+	if s.db == nil {
+		return nil, apperror.New(apperror.CodeStoreOpenFailed, "task store unavailable: no open database")
+	}
+	return tasks.New(s.db.DB()).List(context.Background(), tasks.DefaultListLimit)
 }

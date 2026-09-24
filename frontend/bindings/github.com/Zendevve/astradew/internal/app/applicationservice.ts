@@ -14,10 +14,22 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as approot$0 from "../approot/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as tasks$0 from "../tasks/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
+
+/**
+ * GetSetting returns the current value of one registry setting: the stored
+ * JSON scalar, or the declared default when never written. An unknown key
+ * refuses with SETTING_UNKNOWN.
+ */
+export function GetSetting(key: string): $CancellablePromise<any> {
+    return $Call.ByID(2245991446, key);
+}
 
 /**
  * Health reports only what the backend can observe: the constructed identity,
@@ -61,4 +73,42 @@ export function Paths(): $CancellablePromise<approot$0.Paths> {
  */
 export function ProbeFailure(): $CancellablePromise<$models.Info> {
     return $Call.ByID(2863300802);
+}
+
+/**
+ * RecentTasks returns recent task records newest-first, re-read live from
+ * SQLite like Task. The frontend calls it on mount so the visible run
+ * always reflects the durable rows, never a replayed event.
+ */
+export function RecentTasks(): $CancellablePromise<tasks$0.Task[] | null> {
+    return $Call.ByID(391680125);
+}
+
+/**
+ * SetSetting validates value against the key's declaration and stores it. An
+ * unknown key refuses with SETTING_UNKNOWN; an invalid value refuses with
+ * recoverable SETTING_INVALID, naming the key, the reason, and the preserved
+ * previous value. The stored value is left unchanged on any refusal.
+ */
+export function SetSetting(key: string, value: any): $CancellablePromise<void> {
+    return $Call.ByID(1440467650, key, value);
+}
+
+/**
+ * Settings lists every registry setting with its current value and whether
+ * it is still the declared default.
+ */
+export function Settings(): $CancellablePromise<$models.SettingView[] | null> {
+    return $Call.ByID(1603214587);
+}
+
+/**
+ * Task returns the durable record for id, re-read live from SQLite
+ * through the open handle (ADR 0006: rows are the source of truth, Wails
+ * events are live hints never replayed). An unknown id reports
+ * TASK_NOT_FOUND; a service with no open store reports the store
+ * unavailable instead of fabricating a record.
+ */
+export function Task(id: string): $CancellablePromise<tasks$0.Task> {
+    return $Call.ByID(300183187, id);
 }

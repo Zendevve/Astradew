@@ -14,7 +14,9 @@ import (
 	"github.com/Zendevve/astradew/internal/apperror"
 	"github.com/Zendevve/astradew/internal/approot"
 	"github.com/Zendevve/astradew/internal/buildinfo"
+	"github.com/Zendevve/astradew/internal/settings"
 	"github.com/Zendevve/astradew/internal/store"
+	"github.com/Zendevve/astradew/internal/tasks"
 )
 
 func TestServiceReportsTheIdentityItWasConstructedWith(t *testing.T) {
@@ -440,5 +442,270 @@ func TestHealthSurvivesBoundaryCall(t *testing.T) {
 	}
 	if !decoded.Database.Healthy || decoded.Database.Version != db.Version() {
 		t.Fatalf("boundary database = %+v, want healthy at version %d", decoded.Database, db.Version())
+	}
+}
+
+// Task must travel the real boundary the way Paths does: through the bound
+// method's call path, so the record the frontend reads is the durable row
+// the service re-read from SQLite.
+func TestTaskSurvivesBoundaryCall(t *testing.T) {
+	_ = application.New(application.Options{})
+	bindings := application.NewBindings(nil, nil)
+	paths, err := approot.ResolveWithBase(t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveWithBase() error = %v", err)
+	}
+	db := openTestStore(t, paths)
+	ctx := context.Background()
+	created, err := tasks.New(db.DB()).Create(ctx, "startup")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := tasks.New(db.DB()).Succeed(ctx, created.ID, "startup complete at schema version 1"); err != nil {
+		t.Fatalf("Succeed() error = %v", err)
+	}
+	svc := NewWithPathsAndStore("Astradew", "1.4.2", paths, db)
+	if err := bindings.Add(application.NewServiceWithOptions(svc, application.ServiceOptions{
+		MarshalError: apperror.MarshalError,
+	})); err != nil {
+		t.Fatalf("bindings.Add() error = %v", err)
+	}
+
+	bound := bindings.Get(&application.CallOptions{
+		MethodName: "github.com/Zendevve/astradew/internal/app.ApplicationService.Task",
+	})
+	if bound == nil {
+		t.Fatal("bound Task method not found")
+	}
+	idArg, err := json.Marshal(created.ID)
+	if err != nil {
+		t.Fatalf("marshalling id: %v", err)
+	}
+	result, err := bound.Call(context.TODO(), []json.RawMessage{idArg})
+	if err != nil {
+		t.Fatalf("Call error = %v", err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshalling Call result: %v", err)
+	}
+	var decoded tasks.Task
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decoding result %s: %v", encoded, err)
+	}
+	if decoded.ID != created.ID || decoded.Status != tasks.StatusSucceeded {
+		t.Fatalf("boundary Task = %+v, want id %q status succeeded", decoded, created.ID)
+	}
+	if decoded.Outcome == nil || *decoded.Outcome != "startup complete at schema version 1" {
+		t.Fatalf("boundary Task outcome = %v, want the succeed summary", decoded.Outcome)
+	}
+
+	// An unknown id keeps its typed code across the boundary: the
+	// marshalled error must still name TASK_NOT_FOUND.
+	unknownArg, err := json.Marshal("task-does-not-exist")
+	if err != nil {
+		t.Fatalf("marshalling unknown id: %v", err)
+	}
+	if _, err := bound.Call(context.TODO(), []json.RawMessage{unknownArg}); err == nil {
+		t.Fatal("Call unknown id error = nil, want TASK_NOT_FOUND")
+	} else {
+		var callErr *application.CallError
+		if !errors.As(err, &callErr) {
+			t.Fatalf("Call err = %#v, want *application.CallError", err)
+		}
+		cause, marshalErr := json.Marshal(callErr.Cause)
+		if marshalErr != nil {
+			t.Fatalf("marshalling CallError cause: %v", marshalErr)
+		}
+		var payload apperror.AppError
+		if err := json.Unmarshal(cause, &payload); err != nil {
+			t.Fatalf("decoding cause %s: %v", cause, err)
+		}
+		if payload.Code != apperror.CodeTaskNotFound {
+			t.Fatalf("boundary error code = %q, want %q", payload.Code, apperror.CodeTaskNotFound)
+		}
+	}
+}
+
+// Settings lists every registry setting with its declared default before
+// anything is written, and nil-store honesty: without a store it refuses
+// with SETTING_UNAVAILABLE, never fabricated values.
+func TestSettingsListsDefaultsAndRefusesNilStore(t *testing.T) {
+	paths, err := approot.ResolveWithBase(t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveWithBase() error = %v", err)
+	}
+	db := openTestStore(t, paths)
+	svc := NewWithPathsAndStore("Astradew", "1.4.2", paths, db)
+	list, err := svc.Settings()
+	if err != nil {
+		t.Fatalf("Settings() error = %v", err)
+	}
+	if len(list) != len(settings.Registry) {
+		t.Fatalf("Settings() returned %d entries, want %d registry entries", len(list), len(settings.Registry))
+	}
+	for _, view := range list {
+		if !view.IsDefault {
+			t.Fatalf("Settings() %q IsDefault = false, want true before any write", view.Name)
+		}
+	}
+	if _, err := svc.GetSetting("theme"); err != nil {
+		t.Fatalf("GetSetting(theme) error = %v", err)
+	}
+
+	bare := New("Astradew", "1.4.2")
+	if _, err := bare.Settings(); settingsCode(t, err) != apperror.CodeSettingUnavailable {
+		t.Fatalf("Settings() nil-store code = %v, want SETTING_UNAVAILABLE", err)
+	}
+	if _, err := bare.GetSetting("theme"); settingsCode(t, err) != apperror.CodeSettingUnavailable {
+		t.Fatalf("GetSetting() nil-store code = %v, want SETTING_UNAVAILABLE", err)
+	}
+	if err := bare.SetSetting("theme", "dark"); settingsCode(t, err) != apperror.CodeSettingUnavailable {
+		t.Fatalf("SetSetting() nil-store code = %v, want SETTING_UNAVAILABLE", err)
+	}
+}
+
+// Set then get round-trips through the service: the stored scalar comes back,
+// and Settings marks the row non-default.
+func TestSetSettingRoundTrip(t *testing.T) {
+	paths, err := approot.ResolveWithBase(t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveWithBase() error = %v", err)
+	}
+	db := openTestStore(t, paths)
+	svc := NewWithPathsAndStore("Astradew", "1.4.2", paths, db)
+	if err := svc.SetSetting("theme", "dark"); err != nil {
+		t.Fatalf("SetSetting(theme) error = %v", err)
+	}
+	got, err := svc.GetSetting("theme")
+	if err != nil {
+		t.Fatalf("GetSetting(theme) error = %v", err)
+	}
+	if got != "dark" {
+		t.Fatalf("GetSetting(theme) = %#v, want %q", got, "dark")
+	}
+	list, err := svc.Settings()
+	if err != nil {
+		t.Fatalf("Settings() error = %v", err)
+	}
+	for _, view := range list {
+		if view.Name == "theme" && view.IsDefault {
+			t.Fatalf("Settings() theme IsDefault = true after write")
+		}
+	}
+}
+
+// An invalid value refuses with SETTING_INVALID and the stored value stays
+// exactly what it was: read before, attempt the write, read after.
+func TestSetSettingInvalidPreservesPrevious(t *testing.T) {
+	paths, err := approot.ResolveWithBase(t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveWithBase() error = %v", err)
+	}
+	db := openTestStore(t, paths)
+	svc := NewWithPathsAndStore("Astradew", "1.4.2", paths, db)
+	if err := svc.SetSetting("ui-scale", 150.0); err != nil {
+		t.Fatalf("SetSetting(ui-scale) error = %v", err)
+	}
+	before, err := svc.GetSetting("ui-scale")
+	if err != nil {
+		t.Fatalf("GetSetting(ui-scale) error = %v", err)
+	}
+	if err := svc.SetSetting("ui-scale", 500.0); settingsCode(t, err) != apperror.CodeSettingInvalid {
+		t.Fatalf("SetSetting(ui-scale, 500) code = %v, want SETTING_INVALID", err)
+	}
+	after, err := svc.GetSetting("ui-scale")
+	if err != nil {
+		t.Fatalf("GetSetting(ui-scale) error = %v", err)
+	}
+	if before != after {
+		t.Fatalf("GetSetting(ui-scale) after rejected Set = %#v, want preserved %#v", after, before)
+	}
+	if _, err := svc.GetSetting("no-such-setting"); settingsCode(t, err) != apperror.CodeSettingUnknown {
+		t.Fatalf("GetSetting(unknown) code = %v, want SETTING_UNKNOWN", err)
+	}
+}
+
+// The invalid path must travel the real boundary: through the bound method's
+// call path with the MarshalError hook, the marshalled error still names
+// SETTING_INVALID.
+func TestSetSettingInvalidSurvivesBoundaryCall(t *testing.T) {
+	_ = application.New(application.Options{})
+	bindings := application.NewBindings(nil, nil)
+	paths, err := approot.ResolveWithBase(t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveWithBase() error = %v", err)
+	}
+	db := openTestStore(t, paths)
+	svc := NewWithPathsAndStore("Astradew", "1.4.2", paths, db)
+	if err := bindings.Add(application.NewServiceWithOptions(svc, application.ServiceOptions{
+		MarshalError: apperror.MarshalError,
+	})); err != nil {
+		t.Fatalf("bindings.Add() error = %v", err)
+	}
+
+	bound := bindings.Get(&application.CallOptions{
+		MethodName: "github.com/Zendevve/astradew/internal/app.ApplicationService.SetSetting",
+	})
+	if bound == nil {
+		t.Fatal("bound SetSetting method not found")
+	}
+	keyArg, err := json.Marshal("theme")
+	if err != nil {
+		t.Fatalf("marshalling key: %v", err)
+	}
+	valueArg, err := json.Marshal("sepia")
+	if err != nil {
+		t.Fatalf("marshalling value: %v", err)
+	}
+	callErr := callSettings(t, bound, keyArg, valueArg)
+	var payload apperror.AppError
+	if err := json.Unmarshal(callErr.Cause.(json.RawMessage), &payload); err != nil {
+		t.Fatalf("decoding cause %v: %v", callErr.Cause, err)
+	}
+	if payload.Code != apperror.CodeSettingInvalid {
+		t.Fatalf("boundary error code = %q, want %q", payload.Code, apperror.CodeSettingInvalid)
+	}
+}
+
+// callSettings runs a bound SetSetting call expecting a SETTING_INVALID
+// refusal and returns the boundary *CallError. The boundary wraps the
+// service error in a *CallError whose Cause carries the MarshalError output
+// — the same path the probe test asserts — so the code is read off the
+// cause, not the error itself.
+func callSettings(t *testing.T, bound *application.BoundMethod, args ...json.RawMessage) *application.CallError {
+	t.Helper()
+	if _, err := bound.Call(context.TODO(), args); err == nil {
+		t.Fatal("Call SetSetting(theme, sepia) error = nil, want SETTING_INVALID")
+		return nil
+	} else {
+		var callErr *application.CallError
+		if !errors.As(err, &callErr) {
+			t.Fatalf("Call err = %#v, want *application.CallError", err)
+		}
+		return callErr
+	}
+}
+
+// settingsCode extracts the typed code from an error, failing the test when
+// the error carries none.
+func settingsCode(t *testing.T, err error) apperror.Code {
+	t.Helper()
+	var appErr *apperror.AppError
+	if !errors.As(err, &appErr) {
+		t.Fatalf("error %#v carries no typed code", err)
+	}
+	return appErr.Code
+}
+
+// A service constructed without a store refuses task reads with
+// STORE_OPEN_FAILED — never a fabricated record or an empty list.
+func TestTaskRefusesNilStore(t *testing.T) {
+	bare := New("Astradew", "1.4.2")
+	if _, err := bare.Task("anything"); settingsCode(t, err) != apperror.CodeStoreOpenFailed {
+		t.Fatalf("Task() nil-store code = %v, want STORE_OPEN_FAILED", err)
+	}
+	if _, err := bare.RecentTasks(); settingsCode(t, err) != apperror.CodeStoreOpenFailed {
+		t.Fatalf("RecentTasks() nil-store code = %v, want STORE_OPEN_FAILED", err)
 	}
 }

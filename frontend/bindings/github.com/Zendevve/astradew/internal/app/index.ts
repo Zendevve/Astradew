@@ -13,5 +13,6 @@ export type {
     HealthReport,
     HealthUnavailable,
     Info,
-    InitStep
+    InitStep,
+    SettingView
 } from "./models.js";

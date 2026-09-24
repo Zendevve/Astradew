@@ -10,6 +10,8 @@ import NavLink from "./ui/NavLink";
 import EmptyState from "./ui/EmptyState";
 import StatusText from "./ui/StatusText";
 import HealthSection from "./pages/HealthSection";
+import SettingsSection from "./pages/SettingsSection";
+import StartupTaskSection from "./pages/StartupTaskSection";
 import { ROUTES } from "./pages/routes";
 
 /** State of the failure-path demo probe. Idle until the user runs it. */
@@ -168,9 +170,15 @@ export default function App() {
             <EmptyState title={active.heading} description={active.empty} />
             <HealthSection />
           </>
+        ) : active.path === "/settings" ? (
+          <>
+            <EmptyState title={active.heading} description={active.empty} />
+            <SettingsSection />
+          </>
         ) : (
           <EmptyState title={active.heading} description={active.empty} />
         )}
+        <StartupTaskSection />
         <section className="app-paths" aria-label="Application data">
           <h2>Application data</h2>
           <StatusText icon="○">

@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 	"log"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -18,6 +19,7 @@ import (
 	"github.com/Zendevve/astradew/internal/buildinfo"
 	"github.com/Zendevve/astradew/internal/logging"
 	"github.com/Zendevve/astradew/internal/store"
+	"github.com/Zendevve/astradew/internal/tasks"
 )
 
 //go:embed all:frontend/dist
@@ -43,6 +45,28 @@ func main() {
 		log.Fatalf("refusing startup: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+
+	// The durable startup record starts at Open: task rows cannot exist
+	// before migration, so anything earlier (root resolution) is log-only
+	// via the logging package and never fabricated as a row. This
+	// Create→Succeed pair records the visible first run — root resolved
+	// plus schema version — as the source of truth per ADR 0006; Wails
+	// events are live hints only and nothing here emits one. A write
+	// failure is logged, never fatal: startup already refused loudly
+	// above when the database itself was unusable.
+	startupTasks := tasks.New(db.DB())
+	startupCtx := logging.WithOperationID(context.Background(), "startup")
+	if startupTask, err := startupTasks.Create(startupCtx, "startup"); err != nil {
+		log.Printf("tasks: cannot record startup task: %v", err)
+	} else {
+		startupCtx = logging.ContextWithTask(startupCtx, startupTask.ID)
+		if err := startupTasks.UpdateProgress(startupCtx, startupTask.ID, 1, 2, "root resolved at "+paths.Root); err != nil {
+			log.Printf("tasks: cannot record startup progress: %v", err)
+		}
+		if err := startupTasks.Succeed(startupCtx, startupTask.ID, fmt.Sprintf("startup complete at schema version %d", db.Version())); err != nil {
+			log.Printf("tasks: cannot complete startup task: %v", err)
+		}
+	}
 
 	svc := app.NewWithPathsAndStore(buildinfo.Name, buildinfo.Version, paths, db)
 	astradew := application.New(application.Options{

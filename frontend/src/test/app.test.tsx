@@ -15,6 +15,11 @@ vi.mock("../../bindings/github.com/Zendevve/astradew/internal/app", () => ({
     Paths: vi.fn(),
     Health: vi.fn(),
     NoteLoggerCreated: vi.fn(),
+    Task: vi.fn(),
+    RecentTasks: vi.fn(),
+    Settings: vi.fn(),
+    GetSetting: vi.fn(),
+    SetSetting: vi.fn(),
   },
 }));
 
@@ -22,7 +27,9 @@ const infoMock = vi.mocked(ApplicationService.Info);
 const probeMock = vi.mocked(ApplicationService.ProbeFailure);
 const pathsMock = vi.mocked(ApplicationService.Paths);
 const healthMock = vi.mocked(ApplicationService.Health);
-
+const recentTasksMock = vi.mocked(ApplicationService.RecentTasks);
+const settingsMock = vi.mocked(ApplicationService.Settings);
+const setSettingMock = vi.mocked(ApplicationService.SetSetting);
 const dataRoot = "C:\\Users\\test\\AppData\\Local\\Astradew";
 const healthyReport = {
   name: "Astradew",
@@ -55,6 +62,11 @@ const healthyReport = {
     { name: "Mod health", status: "unavailable", reason: "not yet implemented in this phase" },
   ],
 };
+const defaultSettings = [
+  { name: "theme", kind: "string", value: "system", isDefault: true, description: "Colour scheme preference: system, light, or dark." },
+  { name: "ui-scale", kind: "int", value: 100, isDefault: true, description: "Interface scale in percent, from 50 to 200." },
+  { name: "check-updates-on-start", kind: "bool", value: true, isDefault: true, description: "Check for mod updates when Astradew starts." },
+];
 const dataPaths = {
   root: dataRoot,
   database: `${dataRoot}\\database`,
@@ -65,13 +77,16 @@ const dataPaths = {
   logs: `${dataRoot}\\logs`,
   temp: `${dataRoot}\\temp`,
 };
-
 // resetAllMocks wipes stub implementations, and App calls Paths on every
-// mount while the Health view calls Health, so each test starts with
-// resolving stubs; individual tests override them to reject on demand.
+// mount while the Health view calls Health and the Settings view calls
+// Settings, so each test starts with resolving stubs; individual tests
+// override them to reject on demand.
 beforeEach(() => {
   pathsMock.mockResolvedValue(dataPaths);
   healthMock.mockResolvedValue(healthyReport);
+  recentTasksMock.mockResolvedValue([]);
+  settingsMock.mockResolvedValue(defaultSettings);
+  setSettingMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -369,5 +384,85 @@ describe("failure probe", () => {
     );
     const status = await screen.findByText(/Probe unexpectedly succeeded/);
     expect(status.textContent).toContain("Probe result unexpected");
+  });
+});
+
+describe("settings view", () => {
+  it("settings route renders defaults from the backend list", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    window.location.hash = "#/settings";
+    render(<App />);
+    await screen.findByText("Astradew");
+
+    const section = await screen.findByRole("region", { name: "Application settings" });
+    expect(settingsMock).toHaveBeenCalledTimes(1);
+    for (const setting of defaultSettings) {
+      expect(within(section).getByText(setting.description)).not.toBeNull();
+      expect(
+        within(section).getByLabelText(new RegExp(setting.name)),
+      ).not.toBeNull();
+    }
+    expect(
+      within(section).getAllByText(/\(default\)/),
+    ).toHaveLength(defaultSettings.length);
+  });
+
+  it("edit calls SetSetting and re-reads the list", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    window.location.hash = "#/settings";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Astradew");
+
+    const theme = await screen.findByLabelText(/theme/);
+    await user.clear(theme);
+    await user.type(theme, "dark");
+    await user.click(screen.getAllByRole("button", { name: "Save" })[0]);
+    expect(setSettingMock).toHaveBeenCalledWith("theme", "dark");
+    await screen.findByRole("region", { name: "Application settings" });
+    expect(settingsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalid rejection shows the typed code in an alert", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    setSettingMock.mockRejectedValue(
+      Object.assign(new Error("call failed"), {
+        cause: {
+          code: "SETTING_INVALID",
+          message: "invalid value for setting",
+          details: "setting",
+          recoverable: true,
+        },
+      }),
+    );
+    window.location.hash = "#/settings";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Astradew");
+
+    const scale = await screen.findByLabelText(/ui-scale/);
+    await user.clear(scale);
+    await user.type(scale, "500");
+    await user.click(screen.getAllByRole("button", { name: "Save" })[1]);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("SETTING_INVALID");
+  });
+
+  it("says it is reading, then shows an alert on backend refusal", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    let rejectSettings!: (reason: unknown) => void;
+    const deferred = new Promise<never>((_, reject) => {
+      rejectSettings = reject;
+    });
+    settingsMock.mockReturnValue(deferred as never);
+    window.location.hash = "#/settings";
+    render(<App />);
+    await screen.findByText("Astradew");
+    expect(screen.getByText(/reading settings/i)).not.toBeNull();
+
+    rejectSettings(new Error("connection refused"));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Settings are not available");
+    expect(alert.textContent).toContain("connection refused");
   });
 });

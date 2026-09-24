@@ -50,6 +50,27 @@ const (
 	// Details name the failing version, the database path, and both repair
 	// actions with concrete paths.
 	CodeStoreMigrationFailed Code = "STORE_MIGRATION_FAILED"
+	// CodeSettingUnknown is returned when a setting outside this build's
+	// registry is addressed. The registry is the only place a setting is
+	// defined, so an undeclared key is a programmer error, not a default:
+	// it is not recoverable by retrying. Details name the key.
+	CodeSettingUnknown Code = "SETTING_UNKNOWN"
+
+	// CodeSettingInvalid is returned when a value fails a setting's kind or
+	// validation check. It is recoverable: the caller can offer a valid
+	// value and retry. The stored value is left unchanged. Details name the
+	// key, the reason, and the preserved previous value.
+	CodeSettingInvalid Code = "SETTING_INVALID"
+
+	// CodeSettingUnavailable is returned when settings are addressed on a
+	// service constructed without a database handle. It is recoverable: the
+	// caller can retry once a store is bound. Nothing is fabricated.
+	CodeSettingUnavailable Code = "SETTING_UNAVAILABLE"
+	// CodeTaskNotFound is returned when a task record cannot be found for
+	// the requested id (tasks Get/UpdateProgress/Succeed/Fail, or the
+	// bound Task method). Callers branch on the code, never on message
+	// text.
+	CodeTaskNotFound Code = "TASK_NOT_FOUND"
 )
 
 // AppError is a typed service failure. It crosses to TypeScript as the cause

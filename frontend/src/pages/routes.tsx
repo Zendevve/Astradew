@@ -64,6 +64,6 @@ export const ROUTES: RouteDef[] = [
     label: "Settings",
     heading: "Settings",
     empty:
-      "No settings available yet. Configurable options will appear here once a game is configured.",
+      "Application settings live below. Each option shows whether it still holds its default; changing a value saves it to the local database.",
   },
 ];

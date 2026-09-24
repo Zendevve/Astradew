@@ -76,3 +76,16 @@ export interface InitStep {
     "ok": boolean;
     "message": string;
 }
+
+/**
+ * SettingView is one registry setting with its current value: what the
+ * /settings view renders per row. Value holds a JSON scalar (string, bool,
+ * or number); IsDefault reports whether it equals the declared default.
+ */
+export interface SettingView {
+    "name": string;
+    "kind": string;
+    "value": any;
+    "isDefault": boolean;
+    "description": string;
+}

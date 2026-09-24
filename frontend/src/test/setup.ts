@@ -13,6 +13,11 @@ vi.mock("../../bindings/github.com/Zendevve/astradew/internal/app", () => ({
     Paths: vi.fn(),
     Health: vi.fn(),
     NoteLoggerCreated: vi.fn(),
+    Task: vi.fn(),
+    RecentTasks: vi.fn(),
+    Settings: vi.fn(),
+    GetSetting: vi.fn(),
+    SetSetting: vi.fn(),
   },
 }));
 
@@ -63,3 +68,10 @@ vi.mocked(ApplicationService.Health).mockResolvedValue({
     { name: "Mod health", status: "unavailable", reason: "not yet implemented in this phase" },
   ],
 });
+vi.mocked(ApplicationService.Settings).mockResolvedValue([
+  { name: "theme", kind: "string", value: "system", isDefault: true, description: "Colour scheme preference: system, light, or dark." },
+  { name: "ui-scale", kind: "int", value: 100, isDefault: true, description: "Interface scale in percent, from 50 to 200." },
+  { name: "check-updates-on-start", kind: "bool", value: true, isDefault: true, description: "Check for mod updates when Astradew starts." },
+]);
+vi.mocked(ApplicationService.GetSetting).mockResolvedValue("system");
+vi.mocked(ApplicationService.SetSetting).mockResolvedValue(undefined);
