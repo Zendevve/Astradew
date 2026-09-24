@@ -19,7 +19,7 @@ The Go module requires Go 1.25.0 and pins the Wails framework at
 ## Reaching a running application
 
 ```sh
-git clone https://github.com/Zendevve/astradew
+git clone https://github.com/Zendevve/Astradew
 cd astradew
 
 npm install --prefix frontend   # frontend dependencies
