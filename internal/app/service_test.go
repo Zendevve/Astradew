@@ -541,16 +541,22 @@ func TestSettingsListsDefaultsAndRefusesNilStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Settings() error = %v", err)
 	}
-	if len(list) != len(settings.Registry) {
-		t.Fatalf("Settings() returned %d entries, want %d registry entries", len(list), len(settings.Registry))
+	if len(list) != len(settings.Registry)-1 {
+		t.Fatalf("Settings() returned %d entries, want %d registry entries minus the pointer key", len(list), len(settings.Registry)-1)
 	}
 	for _, view := range list {
+		if view.Name == settings.PrimaryGameInstallIDKey {
+			t.Fatalf("Settings() lists %q, want it excluded: the chooser is its only editor", settings.PrimaryGameInstallIDKey)
+		}
 		if !view.IsDefault {
 			t.Fatalf("Settings() %q IsDefault = false, want true before any write", view.Name)
 		}
 	}
 	if _, err := svc.GetSetting("theme"); err != nil {
 		t.Fatalf("GetSetting(theme) error = %v", err)
+	}
+	if _, err := svc.GetSetting(settings.PrimaryGameInstallIDKey); err != nil {
+		t.Fatalf("GetSetting(pointer) error = %v, want readable", err)
 	}
 
 	bare := New("Astradew", "1.4.2")
@@ -595,8 +601,34 @@ func TestSetSettingRoundTrip(t *testing.T) {
 	}
 }
 
+// The primary pointer is set only through the installs chooser: SetSetting
+// on the pointer key refuses with SETTING_INVALID and leaves the stored
+// value unchanged. (SetPrimaryGameInstall and the internal adoption path
+// write via settings.Service.Set directly, so the guard cannot break them.)
+func TestSetSettingRefusesPointerKey(t *testing.T) {
+	paths, err := approot.ResolveWithBase(t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveWithBase() error = %v", err)
+	}
+	db := openTestStore(t, paths)
+	svc := NewWithPathsAndStore("Astradew", "1.4.2", paths, db)
+	before, err := svc.GetSetting(settings.PrimaryGameInstallIDKey)
+	if err != nil {
+		t.Fatalf("GetSetting(pointer) error = %v", err)
+	}
+	if err := svc.SetSetting(settings.PrimaryGameInstallIDKey, 2); settingsCode(t, err) != apperror.CodeSettingInvalid {
+		t.Fatalf("SetSetting(pointer) code = %v, want SETTING_INVALID", err)
+	}
+	after, err := svc.GetSetting(settings.PrimaryGameInstallIDKey)
+	if err != nil {
+		t.Fatalf("GetSetting(pointer) error = %v", err)
+	}
+	if before != after {
+		t.Fatalf("pointer after refused SetSetting = %#v, want preserved %#v", after, before)
+	}
+}
+
 // An invalid value refuses with SETTING_INVALID and the stored value stays
-// exactly what it was: read before, attempt the write, read after.
 func TestSetSettingInvalidPreservesPrevious(t *testing.T) {
 	paths, err := approot.ResolveWithBase(t.TempDir())
 	if err != nil {

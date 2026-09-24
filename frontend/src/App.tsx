@@ -175,6 +175,15 @@ export default function App() {
             <EmptyState title={active.heading} description={active.empty} />
             <SettingsSection />
           </>
+        ) : active.path === "/" ? (
+          <>
+            <EmptyState title={active.heading} description={active.empty} />
+            <p>
+              <NavLink to="/settings" current={false}>
+                Settings
+              </NavLink>
+            </p>
+          </>
         ) : (
           <EmptyState title={active.heading} description={active.empty} />
         )}

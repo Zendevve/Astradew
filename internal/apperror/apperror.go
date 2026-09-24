@@ -66,6 +66,21 @@ const (
 	// service constructed without a database handle. It is recoverable: the
 	// caller can retry once a store is bound. Nothing is fabricated.
 	CodeSettingUnavailable Code = "SETTING_UNAVAILABLE"
+	// CodeGameNotFound refuses a path with no game install. Recoverable: pick
+	// another folder (manual selection is the universal fallback). Details name
+	// the path, plus the installer-bundle hint when the folder is the SMAPI
+	// installer rather than a game.
+	CodeGameNotFound Code = "GAME_NOT_FOUND"
+
+	// CodeGameLegacy refuses a legacy/compat-branch game unmoddable by current
+	// SMAPI. Recoverable: update the game / switch branch, then retry. Details
+	// name legacy vs compatibility-branch.
+	CodeGameLegacy Code = "GAME_LEGACY"
+
+	// CodeGameInvalid refuses a corrupt or unreadable game dir. Recoverable:
+	// verify/reinstall game files or fix permissions, then retry. Details name
+	// the reason.
+	CodeGameInvalid Code = "GAME_INVALID"
 	// CodeTaskNotFound is returned when a task record cannot be found for
 	// the requested id (tasks Get/UpdateProgress/Succeed/Fail, or the
 	// bound Task method). Callers branch on the code, never on message

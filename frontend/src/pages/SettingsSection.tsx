@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 
-import type { SettingView } from "../../bindings/github.com/Zendevve/astradew/internal/app";
+import type {
+  GameInstallView,
+  SettingView,
+} from "../../bindings/github.com/Zendevve/astradew/internal/app";
 import { ApplicationService } from "../../bindings/github.com/Zendevve/astradew/internal/app";
 import { appErrorCode, appErrorPayload } from "../errors";
 import Button from "../ui/Button";
 import StatusText from "../ui/StatusText";
-
 /** Fetch state of the settings list. Idle until the effect runs. */
 type SettingsState =
   | { status: "loading" }
@@ -19,40 +21,28 @@ type RowState =
   | { status: "invalid"; code: string; message: string };
 
 /**
- * SettingsSection renders the Settings view from the backend Settings()
- * list: one labelled native input per registry setting with its current
- * value and honest default marker. Editing a value calls SetSetting and
- * re-reads; an invalid value shows the typed code branch with the backend
- * message. It invents nothing — values come only from the backend.
+ * SettingsSection renders the Settings view: the "Game installs" group
+ * (resolved primary card, folder picker, installs list with explicit
+ * choices) above the generic registry rows. It invents nothing — values
+ * come only from the backend.
  */
 export default function SettingsSection() {
   const [state, setState] = useState<SettingsState>({ status: "loading" });
+  const [installs, setInstalls] = useState<GameInstallView[]>([]);
+  const [installsFailed, setInstallsFailed] = useState<string | null>(null);
 
-  const load = () => {
+  const load = (isCancelled?: () => boolean) => {
+    const cancelled = isCancelled ?? (() => false);
     setState({ status: "loading" });
+    setInstallsFailed(null);
     ApplicationService.Settings().then(
       (settings) => {
-        setState({ status: "ready", settings: settings ?? [] });
-      },
-      (error: unknown) => {
-        setState({
-          status: "failed",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      },
-    );
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    ApplicationService.Settings().then(
-      (settings) => {
-        if (!cancelled) {
+        if (!cancelled()) {
           setState({ status: "ready", settings: settings ?? [] });
         }
       },
       (error: unknown) => {
-        if (!cancelled) {
+        if (!cancelled()) {
           setState({
             status: "failed",
             message: error instanceof Error ? error.message : String(error),
@@ -60,9 +50,27 @@ export default function SettingsSection() {
         }
       },
     );
+    ApplicationService.GameInstalls().then(
+      (rows) => {
+        if (!cancelled()) {
+          setInstalls(rows ?? []);
+        }
+      },
+      (error: unknown) => {
+        if (!cancelled()) {
+          setInstallsFailed(error instanceof Error ? error.message : String(error));
+        }
+      },
+    );
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    load(() => cancelled);
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (state.status === "loading") {
@@ -75,14 +83,189 @@ export default function SettingsSection() {
       </p>
     );
   }
+  const primary = installs.find((row) => row.isPrimary) ?? null;
   return (
-    <section className="settings-list" aria-label="Application settings">
-      {state.settings.map((setting) => (
-        <SettingRow key={setting.name} setting={setting} onSaved={load} />
-      ))}
+    <>
+      <GameInstallsGroup
+        installs={installs}
+        primary={primary}
+        loadError={installsFailed}
+        onChanged={load}
+      />
+      <section className="settings-list" aria-label="Application settings">
+        {state.settings.map((setting) => (
+          <SettingRow key={setting.name} setting={setting} onSaved={load} />
+        ))}
+      </section>
+    </>
+  );
+}
+
+/**
+ * InstallerBundleMarker mirrors internal/detect.InstallerBundleMarker: the
+ * machine-stable Details prefix on the installer-bundle refusal. It is a
+ * code, not prose — the human sentence after it stays free to change.
+ */
+const installerBundleMarker = "SMAPI_INSTALLER_BUNDLE: ";
+
+/** Refusal copy per code: what happened, how to recover, and the retry. */
+function refusalCopy(code: string | null, details: string): string {
+  switch (code) {
+    case "GAME_NOT_FOUND":
+      if (details.startsWith(installerBundleMarker)) {
+        return "This looks like the SMAPI installer — run it instead, then pick the game folder.";
+      }
+      return "No Stardew Valley install in this folder. Choose the folder containing Stardew Valley.dll.";
+    case "GAME_LEGACY":
+      return "This game is too old for current SMAPI (or is the compatibility branch). Update the game / switch branch, then retry.";
+    case "GAME_INVALID":
+      return `${details} Verify game files or fix permissions, then retry.`;
+    default:
+      return details;
+  }
+}
+
+/** Add state: idle, adding, or a typed refusal to display. */
+type AddState =
+  | { status: "idle" }
+  | { status: "adding" }
+  | { status: "refused"; code: string; message: string };
+
+/**
+ * GameInstallsGroup is the single picker flow: resolved primary card, path
+ * text entry plus add button (the automation-drivable picker), installs
+ * list with Primary markers and Use-this choices, and a Detect-now button
+ * present but disabled (auto-discovery lands in a later ticket).
+ */
+function GameInstallsGroup({
+  installs,
+  primary,
+  loadError,
+  onChanged,
+}: {
+  installs: GameInstallView[];
+  primary: GameInstallView | null;
+  loadError: string | null;
+  onChanged: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [add, setAdd] = useState<AddState>({ status: "idle" });
+
+  const submit = () => {
+    const path = draft.trim();
+    if (path === "") {
+      return;
+    }
+    setAdd({ status: "adding" });
+    ApplicationService.AddGameInstall(path).then(
+      () => {
+        setAdd({ status: "idle" });
+        setDraft("");
+        onChanged();
+      },
+      (error: unknown) => {
+        const code = appErrorCode(error);
+        const payload = appErrorPayload(error);
+        const details =
+          payload?.details ??
+          (error instanceof Error ? error.message : String(error));
+        setAdd({
+          status: "refused",
+          code: code ?? "UNKNOWN",
+          message: refusalCopy(code, details),
+        });
+      },
+    );
+  };
+
+  const choose = (id: number) => {
+    ApplicationService.SetPrimaryGameInstall(id).then(
+      () => {
+        onChanged();
+      },
+      (error: unknown) => {
+        const code = appErrorCode(error);
+        const payload = appErrorPayload(error);
+        const details =
+          payload?.details ??
+          (error instanceof Error ? error.message : String(error));
+        setAdd({
+          status: "refused",
+          code: code ?? "UNKNOWN",
+          message: details,
+        });
+      },
+    );
+  };
+
+  return (
+    <section className="game-installs" aria-label="Game installs">
+      <h2>Game installs</h2>
+      {loadError !== null ? (
+        <p role="alert" className="identity-error">
+          Game installs are not available: {loadError}
+        </p>
+      ) : null}
+      {primary === null ? (
+        <p>No game configured yet. Run Detect now or choose the game folder.</p>
+      ) : (
+        <div className="primary-card">
+          <p>Path: {primary.path}</p>
+          <p>Source: {primary.source}</p>
+          <p>Game version: {primary.gameVersion ?? "version unknown"}</p>
+          <p>SMAPI entry point: {primary.smapiExePath ?? "not detected"}</p>
+          <p>
+            SMAPI: {primary.smapiState}
+            {primary.smapiVersion ? ` ${primary.smapiVersion}` : " (version unknown)"}
+          </p>
+        </div>
+      )}
+      <div className="picker-row">
+        <label htmlFor="game-folder-path">Choose game folder…</label>
+        <input
+          id="game-folder-path"
+          type="text"
+          value={draft}
+          placeholder="C:\Program Files (x86)\Steam\steamapps\common\Stardew Valley"
+          onChange={(event) => {
+            setDraft(event.target.value);
+          }}
+        />
+        <Button onClick={submit} disabled={add.status === "adding" || draft.trim() === ""}>
+          {add.status === "adding" ? "Adding…" : "Add"}
+        </Button>
+      </div>
+      {add.status === "refused" ? (
+        <p role="alert" className="identity-error">
+          {add.code}: {add.message} <Button onClick={submit}>Choose a different folder</Button>
+        </p>
+      ) : null}
+      <div className="detect-row">
+        <Button disabled aria-describedby="detect-reason">
+          Detect now
+        </Button>
+        <p className="control-reason" id="detect-reason">
+          Auto-discovery lands in a later ticket.
+        </p>
+      </div>
+      {installs.length > 0 ? (
+        <ul>
+          {installs.map((row) => (
+            <li key={row.id}>
+              <span>{row.path}</span> <span>{row.source}</span>{" "}
+              {row.isPrimary ? (
+                <span>Primary</span>
+              ) : (
+                <Button onClick={() => choose(row.id)}>Use this</Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </section>
   );
 }
+
 
 function SettingRow({
   setting,

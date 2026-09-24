@@ -91,6 +91,23 @@ var Registry = []Setting{
 		Default:     true,
 		Description: "Check for mod updates when Astradew starts.",
 	},
+	{
+		// PrimaryGameInstallID names the game_installs row the product
+		// surfaces. Its only editor is SetPrimaryGameInstall: it is
+		// registered here so Get/set validation exists, but EXCLUDED from
+		// GetAll list output so no raw numeric input can dangle it.
+		Name:        "primary-game-install-id",
+		Kind:        KindInt,
+		Default:     0,
+		Description: "Primary game installation row id; set only through the installs chooser.",
+		Validate: func(value any) error {
+			id, _ := value.(int)
+			if id < 1 {
+				return fmt.Errorf("want >= 1, got %d", id)
+			}
+			return nil
+		},
+	},
 }
 
 // Service reads and writes settings rows through the store's database
@@ -138,8 +155,16 @@ func (s *Service) Get(ctx context.Context, key string) (any, error) {
 	return value, nil
 }
 
+// PrimaryGameInstallIDKey is the settings key naming the primary
+// game_installs row. Row existence is resolved at read/use time, never at
+// Set time: Set cannot refuse a dangling id, and a dangling pointer
+// degrades to "no primary", never to a wrong install.
+const PrimaryGameInstallIDKey = "primary-game-install-id"
+
 // GetAll resolves every registry declaration to its current value,
-// reporting whether each is still the default.
+// reporting whether each is still the default. The primary-install pointer
+// is EXCLUDED: its only editor is the installs chooser, never a raw
+// numeric input. Get still reads it.
 func (s *Service) GetAll(ctx context.Context) ([]Value, error) {
 	stored, err := s.readAll(ctx)
 	if err != nil {
@@ -148,6 +173,9 @@ func (s *Service) GetAll(ctx context.Context) ([]Value, error) {
 	out := make([]Value, 0, len(Registry))
 	for i := range Registry {
 		decl := &Registry[i]
+		if decl.Name == PrimaryGameInstallIDKey {
+			continue
+		}
 		value := decl.Default
 		isDefault := true
 		if raw, ok := stored[decl.Name]; ok {

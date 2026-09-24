@@ -13,6 +13,7 @@ import (
 
 	"github.com/Zendevve/astradew/internal/apperror"
 	"github.com/Zendevve/astradew/internal/approot"
+	"github.com/Zendevve/astradew/internal/detect"
 	"github.com/Zendevve/astradew/internal/settings"
 	"github.com/Zendevve/astradew/internal/store"
 	"github.com/Zendevve/astradew/internal/tasks"
@@ -262,6 +263,20 @@ type SettingView struct {
 	Description string `json:"description"`
 }
 
+// GameInstallView is one game_installs row plus its primary marker. Nullable
+// columns arrive as nil: null means present-but-unknown (versions) or
+// not-yet-detected/absent (entry point), never guessed.
+type GameInstallView struct {
+	ID           int64   `json:"id"`
+	Path         string  `json:"path"`
+	Source       string  `json:"source"`
+	SmapiExePath *string `json:"smapiExePath"`
+	GameVersion  *string `json:"gameVersion"`
+	SmapiVersion *string `json:"smapiVersion"`
+	SmapiState   string  `json:"smapiState"`
+	IsPrimary    bool    `json:"isPrimary"`
+}
+
 // settingsService resolves the settings service over the open handle, or
 // refuses with recoverable SETTING_UNAVAILABLE when constructed without a
 // database — never a fabricated store.
@@ -312,6 +327,9 @@ func (s *ApplicationService) GetSetting(key string) (any, error) {
 // recoverable SETTING_INVALID, naming the key, the reason, and the preserved
 // previous value. The stored value is left unchanged on any refusal.
 func (s *ApplicationService) SetSetting(key string, value any) error {
+	if key == settings.PrimaryGameInstallIDKey {
+		return apperror.NewRecoverable(apperror.CodeSettingInvalid, fmt.Sprintf("invalid value for setting %q", key), fmt.Sprintf("setting %q: the primary install pointer is set only through the installs chooser (SetPrimaryGameInstall); raw numeric editing is refused", key))
+	}
 	svc, err := s.settingsService()
 	if err != nil {
 		return err
@@ -321,6 +339,138 @@ func (s *ApplicationService) SetSetting(key string, value any) error {
 		return apperror.NewRecoverable(apperror.CodeSettingInvalid, fmt.Sprintf("invalid value for setting %q", key), fmt.Sprintf("setting %q: value is not JSON-encodable: %s", key, err))
 	}
 	return svc.Set(context.Background(), key, encoded)
+}
+
+// primaryInstallID resolves the primary-game-install-id pointer at read/use
+// time: the stored id when it names an existing row, else 0 meaning no
+// primary. A dangling pointer degrades to "no primary", never to a wrong
+// install; row existence is resolved here, never at Set.
+func (s *ApplicationService) primaryInstallID(ctx context.Context, svc *settings.Service, installs []store.GameInstall) int64 {
+	raw, err := svc.Get(ctx, settings.PrimaryGameInstallIDKey)
+	if err != nil {
+		return 0
+	}
+	id, ok := raw.(int)
+	if !ok || id < 1 {
+		return 0
+	}
+	for _, install := range installs {
+		if install.ID == int64(id) {
+			return int64(id)
+		}
+	}
+	return 0
+}
+
+// toView renders one row as a GameInstallView: nullable columns arrive as
+// nil (unknown by contract), smapiState from the stored entry point
+// (present → complete, absent → absent; partial is a detector observation
+// #27 surfaces from a fresh probe, never stored).
+func toView(install store.GameInstall, primaryID int64) GameInstallView {
+	state := "absent"
+	if install.SmapiExePath != nil {
+		state = "complete"
+	}
+	return GameInstallView{
+		ID:           install.ID,
+		Path:         install.Path,
+		Source:       install.Source,
+		SmapiExePath: install.SmapiExePath,
+		GameVersion:  install.GameVersion,
+		SmapiVersion: install.SmapiVersion,
+		SmapiState:   state,
+		IsPrimary:    install.ID == primaryID,
+	}
+}
+
+// GameInstalls lists every known game installation with its primary marker.
+// A nil store refuses with recoverable SETTING_UNAVAILABLE, never an empty
+// list fabrication.
+func (s *ApplicationService) GameInstalls() ([]GameInstallView, error) {
+	if s.db == nil {
+		return nil, apperror.NewRecoverable(apperror.CodeSettingUnavailable, "settings unavailable", "settings unavailable: service constructed without a database handle")
+	}
+	ctx := context.Background()
+	installs, err := store.ListGameInstalls(s.db.DB())
+	if err != nil {
+		return nil, err
+	}
+	primaryID := s.primaryInstallID(ctx, settings.New(s.db.DB()), installs)
+	out := make([]GameInstallView, 0, len(installs))
+	for _, install := range installs {
+		out = append(out, toView(install, primaryID))
+	}
+	return out, nil
+}
+
+// SetPrimaryGameInstall points the primary at an existing row. An unknown id
+// refuses with recoverable SETTING_INVALID and the stored value is left
+// untouched. A nil store refuses with SETTING_UNAVAILABLE.
+func (s *ApplicationService) SetPrimaryGameInstall(id int64) error {
+	if s.db == nil {
+		return apperror.NewRecoverable(apperror.CodeSettingUnavailable, "settings unavailable", "settings unavailable: service constructed without a database handle")
+	}
+	ctx := context.Background()
+	if _, err := store.GetGameInstall(s.db.DB(), id); err != nil {
+		return apperror.NewRecoverable(apperror.CodeSettingInvalid, fmt.Sprintf("no known install with id %d", id), fmt.Sprintf("no known install with id %d; pointer unchanged", id))
+	}
+	return settings.New(s.db.DB()).Set(ctx, settings.PrimaryGameInstallIDKey, json.RawMessage(fmt.Sprintf("%d", id)))
+}
+
+// maybeAdoptPrimary sets the pointer to id when it is unset, stale (names a
+// missing row), or this is the only row — NEVER stealing a healthy pointer.
+func (s *ApplicationService) maybeAdoptPrimary(ctx context.Context, svc *settings.Service, id int64, rowCount int) {
+	raw, err := svc.Get(ctx, settings.PrimaryGameInstallIDKey)
+	if err != nil {
+		return
+	}
+	current, ok := raw.(int)
+	if !ok {
+		return
+	}
+	if current >= 1 && rowCount > 1 {
+		if _, err := store.GetGameInstall(s.db.DB(), int64(current)); err == nil {
+			return
+		}
+	}
+	_ = svc.Set(ctx, settings.PrimaryGameInstallIDKey, json.RawMessage(fmt.Sprintf("%d", id)))
+}
+
+// AddGameInstall canonicalises path Go-side, probes os.DirFS(path) through
+// the same detector the automatic pass uses, and upserts the durable row:
+// re-picks refresh instead of duplicating, versions stay nil (unknown by
+// contract), and a second install never steals a healthy primary. Refusals
+// carry the typed GAME_* codes with per-code recovery copy. A nil store
+// refuses with SETTING_UNAVAILABLE.
+func (s *ApplicationService) AddGameInstall(path string) (GameInstallView, error) {
+	if s.db == nil {
+		return GameInstallView{}, apperror.NewRecoverable(apperror.CodeSettingUnavailable, "settings unavailable", "settings unavailable: service constructed without a database handle")
+	}
+	canonical, err := store.CanonicalGamePath(path)
+	if err != nil {
+		return GameInstallView{}, apperror.NewRecoverable(apperror.CodeGameInvalid, "game folder is unreadable", fmt.Sprintf("game folder is unreadable: %s", err))
+	}
+	report, err := detect.Detect(os.DirFS(canonical))
+	if err != nil {
+		return GameInstallView{}, err
+	}
+	var smapiExe *string
+	if report.SmapiExePath != "" {
+		entry := report.SmapiExePath
+		smapiExe = &entry
+	}
+	ctx := context.Background()
+	install, err := store.UpsertGameInstall(s.db.DB(), canonical, "manual", smapiExe, nil, nil)
+	if err != nil {
+		return GameInstallView{}, err
+	}
+	svc := settings.New(s.db.DB())
+	installs, err := store.ListGameInstalls(s.db.DB())
+	if err != nil {
+		return GameInstallView{}, err
+	}
+	s.maybeAdoptPrimary(ctx, svc, install.ID, len(installs))
+	return toView(install, s.primaryInstallID(ctx, svc, installs)), nil
 }
 
 // Task returns the durable record for id, re-read live from SQLite

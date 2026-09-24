@@ -18,6 +18,9 @@ vi.mock("../../bindings/github.com/Zendevve/astradew/internal/app", () => ({
     Settings: vi.fn(),
     GetSetting: vi.fn(),
     SetSetting: vi.fn(),
+    GameInstalls: vi.fn(),
+    AddGameInstall: vi.fn(),
+    SetPrimaryGameInstall: vi.fn(),
   },
 }));
 
@@ -75,3 +78,15 @@ vi.mocked(ApplicationService.Settings).mockResolvedValue([
 ]);
 vi.mocked(ApplicationService.GetSetting).mockResolvedValue("system");
 vi.mocked(ApplicationService.SetSetting).mockResolvedValue(undefined);
+vi.mocked(ApplicationService.GameInstalls).mockResolvedValue([]);
+vi.mocked(ApplicationService.AddGameInstall).mockResolvedValue({
+  id: 1,
+  path: "C:\\Games\\Stardew Valley",
+  source: "manual",
+  smapiExePath: null,
+  gameVersion: null,
+  smapiVersion: null,
+  smapiState: "absent",
+  isPrimary: true,
+});
+vi.mocked(ApplicationService.SetPrimaryGameInstall).mockResolvedValue(undefined);

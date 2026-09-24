@@ -85,17 +85,17 @@ func TestFreshOpenCreatesVersionedDatabase(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 
-	if s.Version() != 1 {
-		t.Fatalf("Version() = %d, want 1", s.Version())
+	if s.Version() != 2 {
+		t.Fatalf("Version() = %d, want 2", s.Version())
 	}
 	if want := filepath.Join(paths.Database, DBFileName); s.Path() != want {
 		t.Fatalf("Path() = %q, want %q", s.Path(), want)
 	}
-	if got := s.Status(); got.Path != s.Path() || got.Version != 1 {
-		t.Fatalf("Status() = %+v, want path and version 1", got)
+	if got := s.Status(); got.Path != s.Path() || got.Version != 2 {
+		t.Fatalf("Status() = %+v, want path and version 2", got)
 	}
 	tables := tableNames(t, s.DB())
-	for _, want := range []string{"schema_migrations", "settings", "tasks"} {
+	for _, want := range []string{"schema_migrations", "settings", "tasks", "game_installs"} {
 		if !tables[want] {
 			t.Fatalf("table %q missing, have %v", want, tables)
 		}
@@ -148,8 +148,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 		t.Fatalf("second Open() error = %v", err)
 	}
 	defer func() { _ = second.Close() }()
-	if second.Version() != 1 {
-		t.Fatalf("Version() = %d, want 1: reaching the same version twice must be a no-op", second.Version())
+	if second.Version() != 2 {
+		t.Fatalf("Version() = %d, want 2: reaching the same version twice must be a no-op", second.Version())
 	}
 }
 
@@ -176,11 +176,11 @@ func TestUpgradeFromVersionZeroFixture(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer func() { _ = s.Close() }()
-	if s.Version() != 1 {
-		t.Fatalf("Version() = %d, want 1", s.Version())
+	if s.Version() != 2 {
+		t.Fatalf("Version() = %d, want 2", s.Version())
 	}
 	tables := tableNames(t, s.DB())
-	for _, want := range []string{"schema_migrations", "settings", "tasks"} {
+	for _, want := range []string{"schema_migrations", "settings", "tasks", "game_installs"} {
 		if !tables[want] {
 			t.Fatalf("table %q missing after upgrade, have %v", want, tables)
 		}

@@ -20,6 +20,9 @@ vi.mock("../../bindings/github.com/Zendevve/astradew/internal/app", () => ({
     Settings: vi.fn(),
     GetSetting: vi.fn(),
     SetSetting: vi.fn(),
+    GameInstalls: vi.fn(),
+    AddGameInstall: vi.fn(),
+    SetPrimaryGameInstall: vi.fn(),
   },
 }));
 
@@ -30,6 +33,9 @@ const healthMock = vi.mocked(ApplicationService.Health);
 const recentTasksMock = vi.mocked(ApplicationService.RecentTasks);
 const settingsMock = vi.mocked(ApplicationService.Settings);
 const setSettingMock = vi.mocked(ApplicationService.SetSetting);
+const installsMock = vi.mocked(ApplicationService.GameInstalls);
+const addInstallMock = vi.mocked(ApplicationService.AddGameInstall);
+const setPrimaryMock = vi.mocked(ApplicationService.SetPrimaryGameInstall);
 const dataRoot = "C:\\Users\\test\\AppData\\Local\\Astradew";
 const healthyReport = {
   name: "Astradew",
@@ -87,6 +93,18 @@ beforeEach(() => {
   recentTasksMock.mockResolvedValue([]);
   settingsMock.mockResolvedValue(defaultSettings);
   setSettingMock.mockResolvedValue(undefined);
+  installsMock.mockResolvedValue([]);
+  addInstallMock.mockResolvedValue({
+    id: 1,
+    path: "C:\\Games\\Stardew Valley",
+    source: "manual",
+    smapiExePath: null,
+    gameVersion: null,
+    smapiVersion: null,
+    smapiState: "absent",
+    isPrimary: true,
+  });
+  setPrimaryMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {

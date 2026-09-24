@@ -184,7 +184,8 @@ func TestUnrecognisedRowsPreservedByteUntouched(t *testing.T) {
 }
 
 // GetAll lists every declaration with its current value and whether it is
-// still the default.
+// still the default — EXCEPT the primary-install pointer, whose only editor
+// is the installs chooser. Get still reads the pointer.
 func TestGetAllListsRegistryWithCurrentValues(t *testing.T) {
 	svc, _, _ := openService(t)
 	ctx := context.TODO()
@@ -195,12 +196,15 @@ func TestGetAllListsRegistryWithCurrentValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAll() error = %v", err)
 	}
-	if len(all) != len(Registry) {
-		t.Fatalf("GetAll() returned %d values, want %d registry entries", len(all), len(Registry))
+	if len(all) != len(Registry)-1 {
+		t.Fatalf("GetAll() returned %d values, want %d registry entries minus the pointer key", len(all), len(Registry)-1)
 	}
 	byName := make(map[string]Value, len(all))
 	for _, value := range all {
 		byName[value.Name] = value
+	}
+	if _, found := byName[PrimaryGameInstallIDKey]; found {
+		t.Fatalf("GetAll() lists %q, want it excluded: the chooser is its only editor", PrimaryGameInstallIDKey)
 	}
 	theme := byName["theme"]
 	if !jsonEqual(theme.Value, "dark") || theme.IsDefault {
@@ -209,6 +213,46 @@ func TestGetAllListsRegistryWithCurrentValues(t *testing.T) {
 	scale := byName["ui-scale"]
 	if !jsonEqual(scale.Value, 100) || !scale.IsDefault {
 		t.Fatalf("ui-scale = %#v, want 100 default", scale)
+	}
+}
+
+// The pointer key is readable through Get, preserved untouched by GetAll/Set
+// round trips on other keys, and validates >= 1 on Set.
+func TestPrimaryPointerReadableButExcluded(t *testing.T) {
+	svc, db, _ := openService(t)
+	ctx := context.TODO()
+	got, err := svc.Get(ctx, PrimaryGameInstallIDKey)
+	if err != nil {
+		t.Fatalf("Get(pointer) error = %v", err)
+	}
+	if !jsonEqual(got, 0) {
+		t.Fatalf("Get(pointer) = %#v, want unset default 0", got)
+	}
+	if err := svc.Set(ctx, "theme", json.RawMessage(`"dark"`)); err != nil {
+		t.Fatalf("Set(theme) error = %v", err)
+	}
+	if _, err := svc.GetAll(ctx); err != nil {
+		t.Fatalf("GetAll() error = %v", err)
+	}
+	got, err = svc.Get(ctx, PrimaryGameInstallIDKey)
+	if err != nil {
+		t.Fatalf("Get(pointer) after round trip error = %v", err)
+	}
+	if !jsonEqual(got, 0) {
+		t.Fatalf("Get(pointer) after round trip = %#v, want untouched 0", got)
+	}
+	if err := svc.Set(ctx, PrimaryGameInstallIDKey, json.RawMessage(`0`)); codeOf(t, err) != apperror.CodeSettingInvalid {
+		t.Fatalf("Set(pointer, 0) code = %v, want SETTING_INVALID", err)
+	}
+	if err := svc.Set(ctx, PrimaryGameInstallIDKey, json.RawMessage(`3`)); err != nil {
+		t.Fatalf("Set(pointer, 3) error = %v", err)
+	}
+	var stored string
+	if err := db.DB().QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", PrimaryGameInstallIDKey).Scan(&stored); err != nil {
+		t.Fatalf("reading pointer row: %v", err)
+	}
+	if stored != "3" {
+		t.Fatalf("pointer row = %q, want %q", stored, "3")
 	}
 }
 

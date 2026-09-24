@@ -23,6 +23,27 @@ import * as tasks$0 from "../tasks/models.js";
 import * as $models from "./models.js";
 
 /**
+ * AddGameInstall canonicalises path Go-side, probes os.DirFS(path) through
+ * the same detector the automatic pass uses, and upserts the durable row:
+ * re-picks refresh instead of duplicating, versions stay nil (unknown by
+ * contract), and a second install never steals a healthy primary. Refusals
+ * carry the typed GAME_* codes with per-code recovery copy. A nil store
+ * refuses with SETTING_UNAVAILABLE.
+ */
+export function AddGameInstall(path: string): $CancellablePromise<$models.GameInstallView> {
+    return $Call.ByID(2459060774, path);
+}
+
+/**
+ * GameInstalls lists every known game installation with its primary marker.
+ * A nil store refuses with recoverable SETTING_UNAVAILABLE, never an empty
+ * list fabrication.
+ */
+export function GameInstalls(): $CancellablePromise<$models.GameInstallView[] | null> {
+    return $Call.ByID(788972356);
+}
+
+/**
  * GetSetting returns the current value of one registry setting: the stored
  * JSON scalar, or the declared default when never written. An unknown key
  * refuses with SETTING_UNKNOWN.
@@ -82,6 +103,15 @@ export function ProbeFailure(): $CancellablePromise<$models.Info> {
  */
 export function RecentTasks(): $CancellablePromise<tasks$0.Task[] | null> {
     return $Call.ByID(391680125);
+}
+
+/**
+ * SetPrimaryGameInstall points the primary at an existing row. An unknown id
+ * refuses with recoverable SETTING_INVALID and the stored value is left
+ * untouched. A nil store refuses with SETTING_UNAVAILABLE.
+ */
+export function SetPrimaryGameInstall(id: number): $CancellablePromise<void> {
+    return $Call.ByID(1747383929, id);
 }
 
 /**
