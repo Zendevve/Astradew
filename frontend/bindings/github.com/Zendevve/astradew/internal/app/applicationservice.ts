@@ -21,3 +21,13 @@ import * as $models from "./models.js";
 export function Info(): $CancellablePromise<$models.Info> {
     return $Call.ByID(1279469806);
 }
+
+/**
+ * ProbeFailure is a failing demo probe for the typed-error path. It returns a
+ * zero Info and a PROBE_FAILURE *apperror.AppError; Wails serialises the error
+ * through the service's MarshalError hook (apperror.MarshalError) so the
+ * TypeScript call rejects with the structured error as its cause.
+ */
+export function ProbeFailure(): $CancellablePromise<$models.Info> {
+    return $Call.ByID(2863300802);
+}
