@@ -4,7 +4,7 @@
 **Description:** A native desktop mod manager for Stardew Valley focused on SMAPI mod installation, profiles, dependency management, updates, diagnostics, rollback, and launch management.  
 **Copyright (c) 2026 Zendevve. All rights reserved.**
 
-**Source:** [Astradew repository URL]
+**Source:** https://github.com/Zendevve/Astradew
 
 ## 1. OWNERSHIP
 
