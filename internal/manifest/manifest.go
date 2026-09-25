@@ -5,8 +5,10 @@
 // panicking, while missing or malformed required identity fails validation.
 // Parsing runs in three stages — JSON decoding, field interpretation, and
 // semantic validation — each with its own error kind. Unknown fields are
-// preserved verbatim for round-trip. The package is pure: it takes bytes,
-// performs no I/O, and introduces no new module dependencies.
+// preserved verbatim for round-trip. The parser is pure: it takes bytes and
+// performs no I/O, and the package introduces no new module dependencies. The
+// scanner alongside it (scan.go) is read-only over an fs.FS seam, which has no
+// write methods at all.
 package manifest
 
 import (
