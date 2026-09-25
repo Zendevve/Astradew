@@ -210,6 +210,7 @@ func dropObservedUnavailable(entries []HealthUnavailable, gameObserved, smapiObs
 	}
 	return kept
 }
+
 // smapiLogDirCandidates names the OS ErrorLogs directories a last-run
 // SMAPI-latest.txt may live in, highest-priority first. It is a stubbable
 // variable so tests never depend on ambient machine state: the default
@@ -307,8 +308,12 @@ func sectionsFromReport(row store.GameInstall, report detect.Report, installsKno
 	if report.GameFromLog && report.GameVersion != "" {
 		detail += "; game version from the last SMAPI run, not installed truth"
 	}
+	state := string(report.Smapi)
+	if report.Version.Conflict != "" {
+		state = string(detect.SmapiPartial)
+	}
 	smapi := &HealthSmapiSection{
-		State:   string(report.Smapi),
+		State:   state,
 		Detail:  detail,
 		Missing: append([]string{}, report.Missing...),
 	}
@@ -343,35 +348,90 @@ func sectionsFromRow(row store.GameInstall, installsKnown int) (*HealthGameSecti
 	return game, smapi
 }
 
+// stalePointerFinding reports a dangling primary pointer: the raw id names
+// no row. Sections stay unobserved and the finding never guesses a
+// replacement — it directs Detect or a re-pick.
+func stalePointerFinding(rawID int) []HealthFinding {
+	return []HealthFinding{{
+		Severity: "error",
+		What:     fmt.Sprintf("primary Game Installation %d is missing: the pointer names an install that is no longer known", rawID),
+		Why:      "Health refuses a replacement guess: adopting another install could point at the wrong game",
+		Action:   "Detect the game folder again in Settings, or re-pick a known Game Installation as the primary",
+	}}
+}
+
+// findingsFromReport computes Health findings from a fresh probe of the
+// primary install. Every finding carries what was seen, why it matters, and
+// what the player can do about it. A vanilla SMAPI-absent install earns
+// none: absent is an observed state, never a problem.
+func findingsFromReport(report detect.Report, gamePath string) []HealthFinding {
+	var findings []HealthFinding
+	if report.PlatformMismatch {
+		findings = append(findings, HealthFinding{
+			Severity: "error",
+			What:     fmt.Sprintf("SMAPI install at %s mixes launcher families: Windows (StardewModdingAPI.exe) beside Linux/macOS (StardewModdingAPI, StardewValley-original)", gamePath),
+			Why:      "the wrong-platform SMAPI build cannot launch this game; mixed signals mean a confused install, not a working one",
+			Action:   fmt.Sprintf("Install the matching SMAPI build for this machine's platform into %s, then re-pick the game folder", gamePath),
+		})
+	}
+	if report.Smapi == detect.SmapiPartial {
+		findings = append(findings, HealthFinding{
+			Severity: "error",
+			What:     fmt.Sprintf("SMAPI install at %s is incomplete: missing %s", gamePath, strings.Join(report.Missing, ", ")),
+			Why:      "a partial SMAPI cannot load mods; the game would run unmodded or fail to start through SMAPI",
+			Action:   fmt.Sprintf("Reinstall SMAPI into %s, then re-pick the game folder so the fresh install is observed", gamePath),
+		})
+	}
+	if report.Version.Conflict != "" {
+		findings = append(findings, HealthFinding{
+			Severity: "error",
+			What:     fmt.Sprintf("SMAPI version conflict at %s: %s; trusts none of its sources", gamePath, report.Version.Conflict),
+			Why:      "the disagreeing sources cannot all be right, so no SMAPI version is recorded or shown",
+			Action:   fmt.Sprintf("Reinstall SMAPI into %s to fix the conflict, then re-pick the game folder", gamePath),
+		})
+	}
+	return findings
+}
+
 // observePrimaryGame resolves the primary Game Installation row and
 // fresh-probes it: Detect over os.DirFS plus the best-effort last-run log
 // header. Any failure (no store, no primary, vanished dir, detection
 // refusal) falls back to the row values or to unobserved (nil sections) —
-// Health never fails and never reports a guess. NO new findings here:
-// stale/partial/conflict/mismatch findings belong to #27.
-func (s *ApplicationService) observePrimaryGame() (*HealthGameSection, *HealthSmapiSection) {
+// Health never fails and never reports a guess. A stale pointer (the raw
+// id names no row) stays unobserved and earns one error finding naming the
+// id — never a replacement guess. Partial/conflict/mismatch findings come
+// from the fresh probe report; a probe failure falls back to the row with
+// no fresh findings.
+func (s *ApplicationService) observePrimaryGame() (*HealthGameSection, *HealthSmapiSection, []HealthFinding) {
 	if s.db == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	ctx := context.Background()
 	svc := settings.New(s.db.DB())
 	installs, err := store.ListGameInstalls(s.db.DB())
-	if err != nil || len(installs) == 0 {
-		return nil, nil
+	if err != nil {
+		return nil, nil, nil
 	}
-	primaryID := s.primaryInstallID(ctx, svc, installs)
-	if primaryID == 0 {
-		return nil, nil
+	raw, err := svc.Get(ctx, settings.PrimaryGameInstallIDKey)
+	if err != nil {
+		return nil, nil, nil
+	}
+	rawID, ok := raw.(int)
+	if !ok || rawID < 1 {
+		return nil, nil, nil
+	}
+	if len(installs) == 0 {
+		return nil, nil, stalePointerFinding(rawID)
 	}
 	var row store.GameInstall
 	for _, install := range installs {
-		if install.ID == primaryID {
+		if install.ID == int64(rawID) {
 			row = install
 			break
 		}
 	}
 	if row.ID == 0 {
-		return nil, nil
+		return nil, nil, stalePointerFinding(rawID)
 	}
 	canonical, err := store.CanonicalGamePath(row.Path)
 	if err != nil {
@@ -379,9 +439,11 @@ func (s *ApplicationService) observePrimaryGame() (*HealthGameSection, *HealthSm
 	}
 	report, err := probeGameReport(canonical)
 	if err != nil {
-		return sectionsFromRow(row, len(installs))
+		game, smapi := sectionsFromRow(row, len(installs))
+		return game, smapi, nil
 	}
-	return sectionsFromReport(row, report, len(installs))
+	game, smapi := sectionsFromReport(row, report, len(installs))
+	return game, smapi, findingsFromReport(report, row.Path)
 }
 
 // Health reports only what the backend can observe: the constructed identity,
@@ -431,8 +493,9 @@ func (s *ApplicationService) Health() HealthReport {
 			Action:   fmt.Sprintf("Restart the application; if it persists, restore the newest backup over %s and restart, or move %s aside and restart", report.Database.Path, report.Database.Path),
 		})
 	}
-	game, smapi := s.observePrimaryGame()
+	game, smapi, observed := s.observePrimaryGame()
 	report.Game, report.Smapi = game, smapi
+	report.Findings = append(report.Findings, observed...)
 	report.Unavailable = dropObservedUnavailable(report.Unavailable, game != nil, smapi != nil)
 	return report
 }
