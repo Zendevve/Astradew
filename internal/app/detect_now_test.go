@@ -235,6 +235,89 @@ func TestDetectNowManyFindsNeedChoice(t *testing.T) {
 	}
 }
 
+// Many finds with a healthy primary keep it and still report needs-choice:
+// the pointer outcome names kept-healthy while the per-row choosers decide.
+func TestDetectNowManyFindsKeepHealthy(t *testing.T) {
+	svc, _ := openInstallStore(t)
+	stubLogCandidates(t)
+	base := t.TempDir()
+	healthy := filepath.Join(base, "healthy")
+	seedDetectDir(t, healthy, false)
+	first, err := svc.AddGameInstall(healthy)
+	if err != nil {
+		t.Fatalf("AddGameInstall() error = %v", err)
+	}
+	otherA := filepath.Join(base, "other-a")
+	otherB := filepath.Join(base, "other-b")
+	seedDetectDir(t, otherA, false)
+	seedDetectDir(t, otherB, false)
+	stubDetectCandidates(t, []discover.Candidate{{Path: otherA, Source: discover.SourceGOG}, {Path: otherB, Source: discover.SourceSteam}})
+	result, err := svc.DetectNow()
+	if err != nil {
+		t.Fatalf("DetectNow() error = %v", err)
+	}
+	if result.Pointer != "kept-healthy" {
+		t.Fatalf("Pointer = %q, want kept-healthy: a healthy primary survives many finds", result.Pointer)
+	}
+	if !result.NeedsChoice || result.Adopted != nil {
+		t.Fatalf("result = %+v, want needs-choice with no adoption", result)
+	}
+	list, err := svc.GameInstalls()
+	if err != nil {
+		t.Fatalf("GameInstalls() error = %v", err)
+	}
+	for _, view := range list {
+		if view.ID == first.ID && !view.IsPrimary {
+			t.Fatal("healthy primary moved on a many-finds pass")
+		}
+	}
+}
+
+// Many finds on a stale pointer still never auto-pick: the dangling pointer
+// stays dangling and the summary reports needs-choice.
+func TestDetectNowManyFindsStaleStaysNeedsChoice(t *testing.T) {
+	svc, _ := openInstallStore(t)
+	stubLogCandidates(t)
+	base := t.TempDir()
+	seed := filepath.Join(base, "seed")
+	seedDetectDir(t, seed, false)
+	if _, err := svc.AddGameInstall(seed); err != nil {
+		t.Fatalf("AddGameInstall(seed) error = %v", err)
+	}
+	first := filepath.Join(base, "first")
+	second := filepath.Join(base, "second")
+	seedDetectDir(t, first, false)
+	seedDetectDir(t, second, false)
+	stubDetectCandidates(t, []discover.Candidate{
+		{Path: first, Source: discover.SourceSteam},
+		{Path: second, Source: discover.SourceGOG},
+	})
+	// Dangle the pointer past every id, mirroring TestDetectNowOneFindRepairsStale.
+	if _, err := svc.db.DB().Exec(`UPDATE settings SET value = ? WHERE key = ?`, "999001", settings.PrimaryGameInstallIDKey); err != nil {
+		t.Fatalf("dangling the pointer: %v", err)
+	}
+	result, err := svc.DetectNow()
+	if err != nil {
+		t.Fatalf("DetectNow() error = %v", err)
+	}
+	if result.Pointer != "needs-choice" {
+		t.Fatalf("Pointer = %q, want needs-choice: many finds never adopt, even on a stale pointer", result.Pointer)
+	}
+	if !result.NeedsChoice || result.Adopted != nil {
+		t.Fatalf("result = %+v, want needs-choice with no adoption", result)
+	}
+	if len(result.Found) != 2 {
+		t.Fatalf("Found = %+v, want both installs recorded", result.Found)
+	}
+	got, err := svc.GetSetting(settings.PrimaryGameInstallIDKey)
+	if err != nil {
+		t.Fatalf("GetSetting(pointer) error = %v", err)
+	}
+	if id, _ := got.(int); id != 999001 {
+		t.Fatalf("pointer = %#v, want the dangling 999001 untouched until the per-row chooser decides", got)
+	}
+}
+
 // Manual adds never steal either: a manual row after auto finds keeps the
 // healthy auto pointer in place.
 func TestDetectNowManualAddNeverStealsAutoPrimary(t *testing.T) {

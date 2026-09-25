@@ -152,13 +152,9 @@ func (s *ApplicationService) DetectNow() (DetectNowResult, error) {
 				InstallsKnown: len(installs),
 			}, nil
 		}
-		outcome := "needs-choice"
-		if stale {
-			outcome = "adopted-stale"
-		}
 		return DetectNowResult{
 			Found:         views,
-			Pointer:       outcome,
+			Pointer:       "needs-choice",
 			NeedsChoice:   true,
 			Message:       "Several installs found. Pick the primary with the per-row chooser.",
 			InstallsKnown: len(installs),
