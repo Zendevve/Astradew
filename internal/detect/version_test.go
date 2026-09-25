@@ -189,6 +189,54 @@ func TestDetectAssemblyManifestAgree(t *testing.T) {
 	}
 }
 
+// Real-shape healthy install (version-read.md §4): ProductVersion keeps the
+// build metadata while the agreed manifests carry the bare release. Display
+// keeps the original string; no conflict.
+func TestDetectAssemblyMetadataAgreesWithManifest(t *testing.T) {
+	m := gameFS("manifest-ok")
+	m["StardewModdingAPI.dll"] = &fstest.MapFile{Data: makePE("4.5.2+821167e5c511bf3a2d98f604e5e838561c469219", "4.5.2.0")}
+	report, err := Detect(m)
+	if err != nil {
+		t.Fatalf("Detect() error = %v", err)
+	}
+	v := report.Version
+	if v.Conflict != "" {
+		t.Fatalf("version = %+v, want no conflict: metadata/padding are not disagreement", v)
+	}
+	if v.Resolved != "4.5.2+821167e5c511bf3a2d98f604e5e838561c469219" {
+		t.Fatalf("Resolved = %q, want the original ProductVersion kept for display", v.Resolved)
+	}
+}
+
+// FileVersion fallback "4.5.2.0" agrees with manifest "4.5.2": zero padding
+// is not disagreement. Display keeps the original fallback string.
+func TestDetectFileVersionPaddingAgreesWithManifest(t *testing.T) {
+	m := gameFS("manifest-ok")
+	m["StardewModdingAPI.dll"] = &fstest.MapFile{Data: makePE("", "4.5.2.0")}
+	report, err := Detect(m)
+	if err != nil {
+		t.Fatalf("Detect() error = %v", err)
+	}
+	if report.Version.Conflict != "" || report.Version.Resolved != "4.5.2.0" {
+		t.Fatalf("version = %+v, want FileVersion fallback resolved without conflict", report.Version)
+	}
+}
+
+
+// Prerelease suffixes are identity: a dev-build assembly beside a release
+// manifest is a real disagreement, not padding.
+func TestDetectPrereleaseDisagreesWithRelease(t *testing.T) {
+	m := gameFS("manifest-ok")
+	m["StardewModdingAPI.dll"] = &fstest.MapFile{Data: makePE("4.5.2-alpha.20240101", "4.5.2.0")}
+	report, err := Detect(m)
+	if err != nil {
+		t.Fatalf("Detect() error = %v", err)
+	}
+	if report.Version.Conflict == "" || report.Version.Resolved != "" {
+		t.Fatalf("version = %+v, want prerelease-vs-release conflict trusting none", report.Version)
+	}
+}
+
 func TestDetectManifestMinApiMismatchConflicts(t *testing.T) {
 	report, err := Detect(gameFS("manifest-minapi"))
 	if err != nil {

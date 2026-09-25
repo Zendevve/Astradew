@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Zendevve/astradew/internal/approot"
+	"github.com/Zendevve/astradew/internal/store"
 )
 
 // TestMain isolates the package from ambient machine state: a real
@@ -174,13 +177,20 @@ func TestAddGameInstallRepicksRefreshVersions(t *testing.T) {
 	}
 }
 
-// With no on-disk version, the last-run log header fills both versions;
-// log-derived values are stored plainly (Health re-derives the flag).
+// With no on-disk version, installed-version columns stay null — the
+// last-run log is not installed truth — while Health surfaces the
+// log-derived values once, explicitly flagged, in the same process and
+// after a close/reopen round trip.
 func TestAddGameInstallLogFallback(t *testing.T) {
 	logdir := filepath.Join(t.TempDir(), "logs")
 	seedLatestLog(t, logdir, "4.5.2", "1.6.15")
 	stubLogDirs(t, logdir)
-	svc, _ := openInstallStore(t)
+	paths, err := approot.ResolveWithBase(t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveWithBase() error = %v", err)
+	}
+	db := openTestStore(t, paths)
+	svc := NewWithPathsAndStore("Astradew", "1.4.2", paths, db)
 	game := filepath.Join(t.TempDir(), "game")
 	seedGameDir(t, game, false)
 
@@ -188,15 +198,38 @@ func TestAddGameInstallLogFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddGameInstall() error = %v", err)
 	}
-	if got := strVal(t, view.GameVersion); got != "1.6.15" {
-		t.Fatalf("GameVersion = %q, want 1.6.15 from the last-run log", got)
-	}
-	if got := strVal(t, view.SmapiVersion); got != "4.5.2" {
-		t.Fatalf("SmapiVersion = %q, want 4.5.2 from the last-run log", got)
+	if view.GameVersion != nil || view.SmapiVersion != nil {
+		t.Fatalf("view = %+v, want nil installed versions: log-only values stay out of the rows", view)
 	}
 	health := svc.Health()
+	if health.Game == nil || health.Game.GameVersion == nil || !strings.Contains(*health.Game.GameVersion, "last SMAPI run") {
+		t.Fatalf("Health game = %+v, want the log-derived game version flagged in its own section", health.Game)
+	}
 	if health.Smapi == nil || !strings.Contains(health.Smapi.Detail, "last SMAPI run") {
 		t.Fatalf("Health Smapi detail = %+v, want the last-run-only caveat", health.Smapi)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.Open(paths)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	restarted := NewWithPathsAndStore("Astradew", "1.4.2", paths, reopened)
+	installs, err := restarted.GameInstalls()
+	if err != nil {
+		t.Fatalf("GameInstalls() after reopen error = %v", err)
+	}
+	if len(installs) != 1 || installs[0].GameVersion != nil || installs[0].SmapiVersion != nil {
+		t.Fatalf("installs after reopen = %+v, want one row with nil installed versions", installs)
+	}
+	health = restarted.Health()
+	if health.Game == nil || health.Game.GameVersion == nil || !strings.Contains(*health.Game.GameVersion, "last SMAPI run") {
+		t.Fatalf("Health game after reopen = %+v, want the flagged last-run value, not a bare version", health.Game)
+	}
+	if health.Smapi == nil || !strings.Contains(health.Smapi.Detail, "last SMAPI run") {
+		t.Fatalf("Health Smapi after reopen = %+v, want the last-run-only caveat", health.Smapi)
 	}
 }
 
@@ -308,5 +341,8 @@ func TestHealthConflictDetailNamesSources(t *testing.T) {
 	}
 	if !strings.Contains(report.Smapi.Detail, "ConsoleCommands") || !strings.Contains(report.Smapi.Detail, "SaveBackup") {
 		t.Fatalf("detail = %q, want both disagreeing manifest sources named", report.Smapi.Detail)
+	}
+	if !strings.Contains(report.Smapi.Detail, "last SMAPI run") {
+		t.Fatalf("detail = %q, want the recorded last-run value kept, never resolving the conflict", report.Smapi.Detail)
 	}
 }

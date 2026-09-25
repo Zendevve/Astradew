@@ -267,19 +267,19 @@ func probeGameReport(canonical string) (detect.Report, error) {
 	return report, nil
 }
 
-// versionsToPersist maps a detection report onto the nullable row columns:
-// gameVersion is nil exactly when the game version is unknown; smapiVersion
-// is nil when unknown OR conflicted — a conflict trusts none of its
-// sources, so nothing is stored. A log-derived resolution is stored
-// plainly (the row has no provenance column by #17): whether a version came
-// from disk or the last run is re-derived by a fresh probe at Health time
-// (see observePrimaryGame); when no fresh probe is possible the fallback
-// sections say so instead of claiming on-disk truth (see sectionsFromRow).
+// versionsToPersist maps a detection report onto the nullable row columns,
+// which hold installed (on-disk) versions only by #25: gameVersion is nil
+// exactly when the on-disk game version is unknown; smapiVersion is nil
+// when unknown OR conflicted — a conflict trusts none of its sources, so
+// nothing is stored. Last-run log values never enter the rows: they are
+// not installed truth, so a log-only install persists nulls and surfaces
+// the last-run values once, at Health time, explicitly flagged.
 func versionsToPersist(report detect.Report) (gameVersion, smapiVersion *string) {
-	if report.GameVersion != "" {
+	if report.GameVersion != "" && !report.GameFromLog {
 		gameVersion = &report.GameVersion
 	}
-	if report.Version.Conflict == "" && report.Version.Resolved != "" {
+	onDiskSMAPI := report.Version.Assembly != "" || report.Version.Manifest != ""
+	if report.Version.Conflict == "" && report.Version.Resolved != "" && onDiskSMAPI {
 		smapiVersion = &report.Version.Resolved
 	}
 	return gameVersion, smapiVersion
@@ -287,9 +287,9 @@ func versionsToPersist(report detect.Report) (gameVersion, smapiVersion *string)
 
 // sectionsFromReport renders the observed Health game/SMAPI sections from a
 // fresh probe of the primary install. The SMAPI detail comes from
-// Versions.Detail(); when the game version itself fell back to the last-run
-// log, the game caveat is appended so a log-derived game version is never
-// presented as installed truth.
+// Versions.Detail(). A log-derived game version is shown inside the game
+// section itself with its last-run qualifier — never bare — so the flag
+// cannot be missed by reading one section alone.
 func sectionsFromReport(row store.GameInstall, report detect.Report, installsKnown int) (*HealthGameSection, *HealthSmapiSection) {
 	game := &HealthGameSection{
 		Path:          row.Path,
@@ -298,6 +298,9 @@ func sectionsFromReport(row store.GameInstall, report detect.Report, installsKno
 	}
 	if report.GameVersion != "" {
 		version := report.GameVersion
+		if report.GameFromLog {
+			version += " (last SMAPI run, not installed truth)"
+		}
 		game.GameVersion = &version
 	}
 	detail := report.Version.Detail()

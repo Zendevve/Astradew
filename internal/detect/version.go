@@ -27,6 +27,9 @@ type Versions struct {
 // sources, the last-run-only caveat, what was detected, or unknown.
 func (v Versions) Detail() string {
 	if v.Conflict != "" {
+		if v.LastRun != "" {
+			return "SMAPI version conflict: " + v.Conflict + "; last run was " + v.LastRun + ", but the conflict trusts none of its sources; reinstall SMAPI to fix"
+		}
 		return "SMAPI version conflict: " + v.Conflict + "; reinstall SMAPI to fix"
 	}
 	if v.Resolved == "" {
@@ -156,9 +159,40 @@ func bundledManifestVersions(gameDir fs.FS) []manifestVersion {
 	return out
 }
 
+// versionIdentity normalises a version string for source comparison only:
+// build metadata ("+...") never distinguishes an install, trailing zero
+// components are padding ("4.5.2" == "4.5.2.0"), and surrounding space is
+// ignored. Prerelease suffixes ("-alpha.<date>") are identity: a dev build
+// beside a release manifest is a real disagreement. Display keeps the
+// original string; only Conflict checks use the identity.
+func versionIdentity(v string) string {
+	trimmed := strings.TrimSpace(v)
+	if i := strings.Index(trimmed, "+"); i >= 0 {
+		trimmed = trimmed[:i]
+	}
+	core, pre, _ := strings.Cut(trimmed, "-")
+	parts := strings.Split(core, ".")
+	for len(parts) > 1 && parts[len(parts)-1] == "0" {
+		parts = parts[:len(parts)-1]
+	}
+	identity := strings.Join(parts, ".")
+	if pre != "" {
+		identity += "-" + pre
+	}
+	return identity
+}
+
+// sameVersion reports whether two version strings name the same release
+// under versionIdentity: metadata and zero padding ignored, prerelease kept.
+func sameVersion(a, b string) bool {
+	return versionIdentity(a) == versionIdentity(b)
+}
+
 // detectSmapiVersions resolves the on-disk SMAPI version; LastRun stays ""
 // here (ApplyLogHeader owns the log fallback). Precedence is assembly, then
-// the UniqueID-gated bundled manifests. Any disagreement — manifests among
+// the UniqueID-gated bundled manifests. Sources compare by versionIdentity
+// (build metadata and zero padding ignored, prerelease kept) while display
+// keeps the original strings. Any real disagreement — manifests among
 // themselves, a manifest Version against its own MinimumApiVersion, or
 // assembly against manifest — names its sources in Conflict and trusts none
 // (Resolved "").
@@ -185,7 +219,7 @@ func detectSmapiVersions(gameDir fs.FS) Versions {
 	default:
 		agree := true
 		for _, m := range mans[1:] {
-			if m.version != mans[0].version {
+			if !sameVersion(m.version, mans[0].version) {
 				agree = false
 				break
 			}
@@ -200,7 +234,7 @@ func detectSmapiVersions(gameDir fs.FS) Versions {
 		}
 		v.Manifest = mans[0].version
 	}
-	if v.Assembly != "" && v.Manifest != "" && v.Assembly != v.Manifest {
+	if v.Assembly != "" && v.Manifest != "" && !sameVersion(v.Assembly, v.Manifest) {
 		v.Conflict = "assembly " + strconv.Quote(v.Assembly) + " vs manifest " + strconv.Quote(v.Manifest)
 		return v
 	}
