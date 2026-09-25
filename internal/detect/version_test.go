@@ -222,7 +222,6 @@ func TestDetectFileVersionPaddingAgreesWithManifest(t *testing.T) {
 	}
 }
 
-
 // Prerelease suffixes are identity: a dev-build assembly beside a release
 // manifest is a real disagreement, not padding.
 func TestDetectPrereleaseDisagreesWithRelease(t *testing.T) {
