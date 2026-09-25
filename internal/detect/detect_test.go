@@ -78,6 +78,48 @@ func gameFS(opts ...string) fstest.MapFS {
 		m["Mods/ConsoleCommands/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"ThirdParty.Fake","Name":"Fake"}`)}
 		m["Mods/.keep"] = &fstest.MapFile{Data: []byte{}}
 	}
+	if enabled["pe-smapi"] {
+		m["StardewModdingAPI.dll"] = &fstest.MapFile{Data: makePE("4.5.2", "4.5.2.0")}
+	}
+	if enabled["pe-game"] {
+		m["Stardew Valley.dll"] = &fstest.MapFile{Data: makePE("BOGUS-PRODUCT", "1.6.15.0")}
+	}
+	if enabled["manifest-ok"] {
+		m["Mods/ConsoleCommands/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"SMAPI.ConsoleCommands","Name":"Console Commands","Version":"4.5.2"}`)}
+		m["Mods/SaveBackup/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"SMAPI.SaveBackup","Name":"Save Backup","Version":"4.5.2"}`)}
+		m["Mods/.keep"] = &fstest.MapFile{Data: []byte{}}
+	}
+	if enabled["manifest-single"] {
+		m["Mods/ConsoleCommands/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"SMAPI.ConsoleCommands","Name":"Console Commands","Version":"4.5.2"}`)}
+		m["Mods/.keep"] = &fstest.MapFile{Data: []byte{}}
+	}
+	if enabled["manifest-conflict"] {
+		m["Mods/ConsoleCommands/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"SMAPI.ConsoleCommands","Name":"Console Commands","Version":"4.5.2"}`)}
+		m["Mods/SaveBackup/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"SMAPI.SaveBackup","Name":"Save Backup","Version":"4.5.3"}`)}
+		m["Mods/.keep"] = &fstest.MapFile{Data: []byte{}}
+	}
+	if enabled["manifest-forged-version"] {
+		m["Mods/ConsoleCommands/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"ThirdParty.Fake","Name":"Fake","Version":"9.9.9"}`)}
+		m["Mods/.keep"] = &fstest.MapFile{Data: []byte{}}
+	}
+	if enabled["pe-smapi-fallback"] {
+		m["StardewModdingAPI.dll"] = &fstest.MapFile{Data: makePE("", "4.5.1.0")}
+	}
+	if enabled["pe-smapi-nokeys"] {
+		m["StardewModdingAPI.dll"] = &fstest.MapFile{Data: makePE("", "")}
+	}
+	if enabled["manifest-other"] {
+		m["Mods/ConsoleCommands/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"SMAPI.ConsoleCommands","Name":"Console Commands","Version":"4.5.3"}`)}
+		m["Mods/.keep"] = &fstest.MapFile{Data: []byte{}}
+	}
+	if enabled["manifest-minapi"] {
+		m["Mods/ConsoleCommands/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"SMAPI.ConsoleCommands","Name":"Console Commands","Version":"4.5.2","MinimumApiVersion":"4.0.0"}`)}
+		m["Mods/.keep"] = &fstest.MapFile{Data: []byte{}}
+	}
+	if enabled["renamed-version"] {
+		m["Mods/Renamed/manifest.json"] = &fstest.MapFile{Data: []byte(`{"UniqueID":"SMAPI.ConsoleCommands","Name":"Console Commands","Version":"4.5.2"}`)}
+		m["Mods/.keep"] = &fstest.MapFile{Data: []byte{}}
+	}
 	return m
 }
 
@@ -151,7 +193,7 @@ func TestDetectValidVanilla(t *testing.T) {
 		t.Fatalf("report = %+v, want valid vanilla absent", report)
 	}
 	if report.GameVersion != "" {
-		t.Fatalf("GameVersion = %q, want empty (unknown by contract)", report.GameVersion)
+		t.Fatalf("GameVersion = %q, want empty (garbage DLL bytes read as unknown)", report.GameVersion)
 	}
 	if report.Missing == nil {
 		t.Fatal("Missing is nil, want empty slice (never null on the wire)")
@@ -264,10 +306,18 @@ func TestDetectNilFSRefusesInvalid(t *testing.T) {
 // suite matches the real filesystem once rather than on every case.
 func TestDetectOsDirFSRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"Stardew Valley.dll", "StardewModdingAPI.exe", "StardewModdingAPI.dll", "StardewModdingAPI.deps.json", "StardewModdingAPI.runtimeconfig.json", "StardewModdingAPI.exe.config", "StardewModdingAPI.xml", "steam_appid.txt"} {
+	for _, name := range []string{"StardewModdingAPI.exe", "StardewModdingAPI.deps.json", "StardewModdingAPI.runtimeconfig.json", "StardewModdingAPI.exe.config", "StardewModdingAPI.xml", "steam_appid.txt"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
 			t.Fatalf("seeding %s: %v", name, err)
 		}
+	}
+	// Synthetic PEs prove the production wiring: real DLL bytes on real
+	// disk read exactly like the in-memory suite.
+	if err := os.WriteFile(filepath.Join(dir, "Stardew Valley.dll"), makePE("BOGUS-PRODUCT", "1.6.15.0"), 0o600); err != nil {
+		t.Fatalf("seeding game dll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "StardewModdingAPI.dll"), makePE("4.5.2", "4.5.2.0"), 0o600); err != nil {
+		t.Fatalf("seeding smapi dll: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "smapi-internal"), 0o755); err != nil {
 		t.Fatalf("seeding smapi-internal: %v", err)
@@ -278,6 +328,12 @@ func TestDetectOsDirFSRoundTrip(t *testing.T) {
 	}
 	if !report.Valid || report.Smapi != SmapiComplete {
 		t.Fatalf("report = %+v, want valid complete over the real filesystem", report)
+	}
+	if report.GameVersion != "1.6.15.0" {
+		t.Fatalf("GameVersion = %q, want FileVersion from the real game DLL", report.GameVersion)
+	}
+	if report.Version.Resolved != "4.5.2" {
+		t.Fatalf("version = %+v, want ProductVersion from the real SMAPI DLL", report.Version)
 	}
 }
 

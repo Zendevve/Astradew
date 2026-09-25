@@ -383,7 +383,7 @@ func TestHealthMarshalsToTheContractKeys(t *testing.T) {
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatalf("decoding Health JSON: %v", err)
 	}
-	for _, key := range []string{"name", "version", "dataRoot", "directories", "database", "initialisation", "findings", "unavailable"} {
+	for _, key := range []string{"name", "version", "dataRoot", "directories", "database", "initialisation", "findings", "unavailable", "game", "smapi"} {
 		if _, ok := decoded[key]; !ok {
 			t.Fatalf("Health JSON %s missing key %q", encoded, key)
 		}

@@ -30,13 +30,16 @@ const InstallerBundleMarker = "SMAPI_INSTALLER_BUNDLE: "
 // Report is what the detector observed. A non-nil error means the path
 // could not be evaluated as a game dir at all; bad news the detector
 // could evaluate (SMAPI absent/partial, platform mismatch) is fields, nil
-// error. Version fields stay empty meaning unknown by contract (#25 owns
-// version reads).
+// error. Version fields stay empty meaning unknown; conflicts name their
+// sources and trust none (Resolved "") until the install is fixed.
+// LastRun is always "" here — only ApplyLogHeader fills it from the
+// last-run log, and only when the on-disk sources are empty.
 type Report struct {
 	Valid            bool        // Stardew Valley.dll present (validity rule, §1.1)
-	GameVersion      string      // best-effort; "" = unknown
+	GameVersion      string      // FileVersion of Stardew Valley.dll; "" = unknown
+	GameFromLog      bool        // GameVersion fell back to the log header (ApplyLogHeader)
 	Smapi            SmapiStatus // absent | complete | partial
-	SmapiVersion     string      // best-effort; "" = unknown (version reads land in #25)
+	Version          Versions    // SMAPI version verdict: sources, resolution, conflict
 	Missing          []string    // partial: which §1 signals are absent (fix = reinstall SMAPI)
 	ModsPresent      bool        // global Mods dir presence only (Phase 1 scope)
 	ModsPath         string      // relative "Mods" when present, else ""
@@ -142,7 +145,8 @@ func bundledModPresent(gameDir fs.FS, dir string) bool {
 // means a modern moddable game. Legacy/compat/invalid states refuse with
 // the typed GAME_* codes (all recoverable *apperror.AppError); bad news
 // the detector CAN evaluate (SMAPI absent/partial, platform mismatch) is
-// fields, nil error. Version fields stay empty: unknown by contract.
+// fields, nil error. Absent version sources read as unknown (""); the
+// last-run log never feeds Detect — ApplyLogHeader owns that fallback.
 func Detect(gameDir fs.FS) (Report, error) {
 	if gameDir == nil {
 		return Report{}, apperror.NewRecoverable(apperror.CodeGameInvalid, "game folder is unreadable", "game folder is unreadable: no filesystem to evaluate")
@@ -244,18 +248,19 @@ func Detect(gameDir fs.FS) (Report, error) {
 		}
 	}
 
-	// Mods doorway: presence and relative path only — no enumeration, no
-	// manifest reads beyond the two bundled identity checks (§2).
+	// Mods doorway: presence and relative path only.
 	if mods, err := exists(gameDir, "Mods"); err == nil && mods {
 		report.ModsPresent = true
 		report.ModsPath = "Mods"
 	}
 
-	// The two bundled System Mods resolve by manifest UniqueID, never by
-	// folder name: a renamed folder can never forge or hide a System Mod.
-	// Their presence corroborates but never overrides the signal verdict.
-	_ = bundledModPresent(gameDir, "ConsoleCommands")
-	_ = bundledModPresent(gameDir, "SaveBackup")
+	// Versions (issue 25): the game reads FileVersion of its DLL only;
+	// SMAPI resolves assembly (ProductVersion, fallback FileVersion), then
+	// the UniqueID-gated bundled manifests, with conflicts trusting none.
+	// LastRun stays "" here. Garbage bytes fail the PE parse and read as
+	// unknown — never an error, never a refusal.
+	report.GameVersion = detectGameVersion(gameDir)
+	report.Version = detectSmapiVersions(gameDir)
 
 	sort.Strings(report.Missing)
 	return report, nil

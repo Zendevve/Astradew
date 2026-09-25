@@ -51,6 +51,20 @@ export interface HealthFinding {
 }
 
 /**
+ * HealthGameSection is the observed primary Game Installation. Null on the
+ * wire until the primary pointer resolves to a row: path and source name
+ * the install, installsKnown counts game_installs rows, and a null
+ * gameVersion means the game is present but its version is unknown — never
+ * guessed.
+ */
+export interface HealthGameSection {
+    "path": string;
+    "source": string;
+    "gameVersion": string | null;
+    "installsKnown": number;
+}
+
+/**
  * HealthReport is everything the Health view can honestly report. The JSON
  * keys are the contract the frontend binds to.
  */
@@ -63,6 +77,25 @@ export interface HealthReport {
     "initialisation": InitStep[] | null;
     "findings": HealthFinding[] | null;
     "unavailable": HealthUnavailable[] | null;
+    "game": HealthGameSection | null;
+    "smapi": HealthSmapiSection | null;
+}
+
+/**
+ * HealthSmapiSection is the observed SMAPI state inside the primary Game
+ * Installation. Null until a game is observed (SMAPI is unobservable
+ * without a game dir); an absent SMAPI is an observed state, never null.
+ * State repeats the detect.SmapiStatus vocabulary verbatim
+ * (absent|complete|partial). A null version means unknown — or conflicted,
+ * which trusts none of its sources and stores nothing. Detail is one honest
+ * sentence (missing list, conflict sources, last-run-only caveat). Missing
+ * names the absent signals when partial, else empty, never null.
+ */
+export interface HealthSmapiSection {
+    "state": string;
+    "version": string | null;
+    "detail": string;
+    "missing": string[] | null;
 }
 
 /**

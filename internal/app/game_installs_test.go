@@ -71,7 +71,8 @@ func installCode(t *testing.T, err error) apperror.Code {
 }
 
 // Add happy path: picking a valid game folder records a durable row as the
-// primary card with unknown versions (nil) and the SMAPI entry point/state.
+// primary card with unknown versions (nil: garbage DLL bytes read as
+// unknown) and the SMAPI entry point/state.
 func TestAddGameInstallHappy(t *testing.T) {
 	svc, _ := openInstallStore(t)
 	dir := t.TempDir()
@@ -85,7 +86,7 @@ func TestAddGameInstallHappy(t *testing.T) {
 		t.Fatalf("view = %+v, want stored path with manual source", view)
 	}
 	if view.GameVersion != nil || view.SmapiVersion != nil {
-		t.Fatalf("view = %+v, want nil versions (unknown by contract)", view)
+		t.Fatalf("view = %+v, want nil versions (unreadable sources stay unknown)", view)
 	}
 	if view.SmapiExePath == nil || *view.SmapiExePath != "StardewModdingAPI.exe" {
 		t.Fatalf("view = %+v, want the .exe entry point", view)

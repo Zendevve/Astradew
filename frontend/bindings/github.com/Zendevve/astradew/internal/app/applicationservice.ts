@@ -24,11 +24,13 @@ import * as $models from "./models.js";
 
 /**
  * AddGameInstall canonicalises path Go-side, probes os.DirFS(path) through
- * the same detector the automatic pass uses, and upserts the durable row:
- * re-picks refresh instead of duplicating, versions stay nil (unknown by
- * contract), and a second install never steals a healthy primary. Refusals
- * carry the typed GAME_* codes with per-code recovery copy. A nil store
- * refuses with SETTING_UNAVAILABLE.
+ * the same detector the automatic pass uses, folds in the best-effort
+ * last-run log header, and upserts the durable row: re-picks refresh instead
+ * of duplicating (versions included), an unknown version persists as nil,
+ * and a second install never steals a healthy primary. A SMAPI conflict
+ * trusts none of its sources and persists nothing. Refusals carry the typed
+ * GAME_* codes with per-code recovery copy. A nil store refuses with
+ * SETTING_UNAVAILABLE.
  */
 export function AddGameInstall(path: string): $CancellablePromise<$models.GameInstallView> {
     return $Call.ByID(2459060774, path);

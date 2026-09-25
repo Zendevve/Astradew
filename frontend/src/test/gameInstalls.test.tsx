@@ -63,6 +63,8 @@ const healthyReport = {
     { name: "SMAPI detection", status: "unavailable", reason: "not yet implemented in this phase" },
     { name: "Mod health", status: "unavailable", reason: "not yet implemented in this phase" },
   ],
+  game: null,
+  smapi: null,
 };
 const defaultSettings = [
   { name: "theme", kind: "string", value: "system", isDefault: true, description: "Colour scheme preference: system, light, or dark." },
@@ -183,6 +185,25 @@ describe("game installs group", () => {
     expect(within(group).getByText("SMAPI entry point: StardewModdingAPI.exe")).not.toBeNull();
     expect(within(group).getByText(/SMAPI: complete/)).not.toBeNull();
     expect(within(group).getByText("Primary")).not.toBeNull();
+  });
+  it("primary card shows real detected versions", async () => {
+    installsMock.mockResolvedValue([
+      {
+        id: 1,
+        path: "C:\\Games\\Stardew Valley",
+        source: "manual",
+        smapiExePath: "StardewModdingAPI.exe",
+        gameVersion: "1.6.15",
+        smapiVersion: "4.1.10",
+        smapiState: "complete",
+        isPrimary: true,
+      },
+    ]);
+    render(<App />);
+    await screen.findByText("Astradew");
+    const group = await screen.findByRole("region", { name: "Game installs" });
+    expect(within(group).getByText("Game version: 1.6.15")).not.toBeNull();
+    expect(within(group).getByText("SMAPI: complete 4.1.10")).not.toBeNull();
   });
 
   it("use-this switches primary through the explicit choice", async () => {

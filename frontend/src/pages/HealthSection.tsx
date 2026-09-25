@@ -10,12 +10,15 @@ type HealthState =
   | { status: "ready"; report: HealthReport }
   | { status: "failed"; message: string };
 
+
 /**
  * HealthSection renders the Health view from the backend Health() report:
  * application identity, per-directory writability, live database state, the
- * recorded startup steps, observed findings, and the not-yet-available
- * capabilities. It invents nothing — unobservable values appear under
- * "Not yet available", never as passes.
+ * observed game and SMAPI sections once detection succeeds, the recorded
+ * startup steps, observed findings, and the not-yet-available capabilities.
+ * It invents nothing — unobservable values appear under "Not yet available",
+ * never as passes; a null game/smapi section renders nothing and the
+ * corresponding unavailable entry keeps guiding.
  */
 export default function HealthSection() {
   const [state, setState] = useState<HealthState>({ status: "loading" });
@@ -114,6 +117,30 @@ export default function HealthSection() {
           </ul>
         )}
       </section>
+      {report.game != null ? (
+        <section className="health-game" aria-label="Game">
+          <h2>Game</h2>
+          <p>Path: {report.game.path}</p>
+          <p>Source: {report.game.source}</p>
+          <p>Game version: {report.game.gameVersion ?? "version unknown"}</p>
+          <p>Installs known: {report.game.installsKnown}</p>
+        </section>
+      ) : null}
+      {report.smapi != null ? (
+        <section className="health-smapi" aria-label="SMAPI">
+          <h2>SMAPI</h2>
+          <p>State: {report.smapi.state}</p>
+          <p>Version: {report.smapi.version ?? "version unknown"}</p>
+          <p>{report.smapi.detail}</p>
+          {(report.smapi.missing ?? []).length > 0 ? (
+            <ul>
+              {(report.smapi.missing ?? []).map((name) => (
+                <li key={name}>Missing: {name}</li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
       {findings.length > 0 ? (
         <section className="health-findings" aria-label="Findings">
           <h2>Findings</h2>

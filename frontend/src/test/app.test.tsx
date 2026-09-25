@@ -3,7 +3,8 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import App from "../App";
-import { ApplicationService, type Info } from "../../bindings/github.com/Zendevve/astradew/internal/app";
+import type { Info } from "../../bindings/github.com/Zendevve/astradew/internal/app";
+import { ApplicationService } from "../../bindings/github.com/Zendevve/astradew/internal/app";
 import { ROUTES } from "../pages/routes";
 
 // Guarantees the bindings stub even if this file runs without the setup
@@ -67,6 +68,8 @@ const healthyReport = {
     { name: "SMAPI detection", status: "unavailable", reason: "not yet implemented in this phase" },
     { name: "Mod health", status: "unavailable", reason: "not yet implemented in this phase" },
   ],
+  game: null,
+  smapi: null,
 };
 const defaultSettings = [
   { name: "theme", kind: "string", value: "system", isDefault: true, description: "Colour scheme preference: system, light, or dark." },
@@ -329,6 +332,101 @@ describe("health view", () => {
     const dbSection = await screen.findByRole("region", { name: "Database" });
     expect(dbSection.textContent).toContain("unavailable");
     expect(dbSection.textContent).not.toMatch(/schema version 1/);
+  });
+  it("renders observed game and smapi sections with real versions", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    healthMock.mockResolvedValue({
+      ...healthyReport,
+      game: {
+        path: "C:\\Games\\Stardew Valley",
+        source: "manual",
+        gameVersion: "1.6.15",
+        installsKnown: 1,
+      },
+      smapi: {
+        state: "complete",
+        version: "4.1.10",
+        detail: "SMAPI 4.1.10 detected.",
+        missing: [],
+      },
+      unavailable: [
+        { name: "Mod health", status: "unavailable", reason: "mod health checks are not yet implemented in this phase" },
+      ],
+    });
+    window.location.hash = "#/health";
+    render(<App />);
+    await screen.findByText("Astradew");
+
+    const gameSection = await screen.findByRole("region", { name: "Game" });
+    expect(gameSection.textContent).toContain("C:\\Games\\Stardew Valley");
+    expect(gameSection.textContent).toContain("manual");
+    expect(gameSection.textContent).toContain("1.6.15");
+    expect(gameSection.textContent).toContain("1");
+
+    const smapiSection = screen.getByRole("region", { name: "SMAPI" });
+    expect(smapiSection.textContent).toContain("complete");
+    expect(smapiSection.textContent).toContain("4.1.10");
+    expect(smapiSection.textContent).toContain("SMAPI 4.1.10 detected.");
+
+    const unavailableSection = screen.getByRole("region", {
+      name: "Not yet available",
+    });
+    expect(unavailableSection.textContent).not.toMatch(/Game detection/);
+    expect(unavailableSection.textContent).not.toMatch(/SMAPI detection/);
+    expect(unavailableSection.textContent).toContain("Mod health");
+  });
+
+  it("renders version unknown and missing entries when observed state is partial", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+    healthMock.mockResolvedValue({
+      ...healthyReport,
+      game: {
+        path: "C:\\Games\\Stardew Valley",
+        source: "manual",
+        gameVersion: null,
+        installsKnown: 1,
+      },
+      smapi: {
+        state: "partial",
+        version: null,
+        detail: "assembly and manifest disagree: x vs y.",
+        missing: ["StardewModdingAPI.exe"],
+      },
+      unavailable: [
+        { name: "Mod health", status: "unavailable", reason: "mod health checks are not yet implemented in this phase" },
+      ],
+    });
+    window.location.hash = "#/health";
+    render(<App />);
+    await screen.findByText("Astradew");
+
+    const gameSection = await screen.findByRole("region", { name: "Game" });
+    expect(gameSection.textContent).toContain("version unknown");
+    const smapiSection = screen.getByRole("region", { name: "SMAPI" });
+    expect(smapiSection.textContent).toContain("partial");
+    expect(smapiSection.textContent).toContain("version unknown");
+    expect(smapiSection.textContent).toContain("assembly and manifest disagree");
+    expect(smapiSection.textContent).toContain("StardewModdingAPI.exe");
+  });
+  it("keeps the honest empty guidance when sections are null", async () => {
+    infoMock.mockResolvedValue({ name: "Astradew", version: "0.0.0" });
+
+    healthMock.mockResolvedValue({
+      ...healthyReport,
+      game: null,
+      smapi: null,
+    });
+    window.location.hash = "#/health";
+    render(<App />);
+    await screen.findByText("Astradew");
+
+    expect(screen.queryByRole("region", { name: "Game" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "SMAPI" })).toBeNull();
+    const unavailableSection = await screen.findByRole("region", {
+      name: "Not yet available",
+    });
+    expect(unavailableSection.textContent).toContain("Game detection");
+    expect(unavailableSection.textContent).toContain("SMAPI detection");
   });
 });
 

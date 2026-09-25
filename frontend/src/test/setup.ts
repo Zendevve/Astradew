@@ -70,6 +70,8 @@ vi.mocked(ApplicationService.Health).mockResolvedValue({
     { name: "SMAPI detection", status: "unavailable", reason: "not yet implemented in this phase" },
     { name: "Mod health", status: "unavailable", reason: "not yet implemented in this phase" },
   ],
+  game: null,
+  smapi: null,
 });
 vi.mocked(ApplicationService.Settings).mockResolvedValue([
   { name: "theme", kind: "string", value: "system", isDefault: true, description: "Colour scheme preference: system, light, or dark." },

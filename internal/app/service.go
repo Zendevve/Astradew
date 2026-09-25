@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/Zendevve/astradew/internal/apperror"
 	"github.com/Zendevve/astradew/internal/approot"
@@ -140,6 +142,33 @@ type HealthUnavailable struct {
 	Reason string `json:"reason"`
 }
 
+// HealthGameSection is the observed primary Game Installation. Null on the
+// wire until the primary pointer resolves to a row: path and source name
+// the install, installsKnown counts game_installs rows, and a null
+// gameVersion means the game is present but its version is unknown — never
+// guessed.
+type HealthGameSection struct {
+	Path          string  `json:"path"`
+	Source        string  `json:"source"`
+	GameVersion   *string `json:"gameVersion"`
+	InstallsKnown int     `json:"installsKnown"`
+}
+
+// HealthSmapiSection is the observed SMAPI state inside the primary Game
+// Installation. Null until a game is observed (SMAPI is unobservable
+// without a game dir); an absent SMAPI is an observed state, never null.
+// State repeats the detect.SmapiStatus vocabulary verbatim
+// (absent|complete|partial). A null version means unknown — or conflicted,
+// which trusts none of its sources and stores nothing. Detail is one honest
+// sentence (missing list, conflict sources, last-run-only caveat). Missing
+// names the absent signals when partial, else empty, never null.
+type HealthSmapiSection struct {
+	State   string   `json:"state"`
+	Version *string  `json:"version"`
+	Detail  string   `json:"detail"`
+	Missing []string `json:"missing"`
+}
+
 // HealthReport is everything the Health view can honestly report. The JSON
 // keys are the contract the frontend binds to.
 type HealthReport struct {
@@ -151,16 +180,205 @@ type HealthReport struct {
 	Initialisation []InitStep          `json:"initialisation"`
 	Findings       []HealthFinding     `json:"findings"`
 	Unavailable    []HealthUnavailable `json:"unavailable"`
+	Game           *HealthGameSection  `json:"game"`
+	Smapi          *HealthSmapiSection `json:"smapi"`
 }
 
 // unavailableCapabilities lists what this phase cannot do yet. Every entry
 // carries status "unavailable" with its reason — never "healthy".
 func unavailableCapabilities() []HealthUnavailable {
 	return []HealthUnavailable{
-		{Name: "Game detection", Status: "unavailable", Reason: "game detection is not yet implemented in this phase"},
-		{Name: "SMAPI detection", Status: "unavailable", Reason: "SMAPI detection is not yet implemented in this phase"},
+		{Name: "Game detection", Status: "unavailable", Reason: "no primary game install observed yet — pick the game folder in Settings"},
+		{Name: "SMAPI detection", Status: "unavailable", Reason: "SMAPI is unobservable without an observed game install"},
 		{Name: "Mod health", Status: "unavailable", Reason: "mod health checks are not yet implemented in this phase; they run once a game with mods is configured"},
 	}
+}
+
+// dropObservedUnavailable drops the Game/SMAPI unavailable entries exactly
+// when the corresponding section is observed. Mod health stays unavailable
+// for all of Phase 1, so "Not yet available" never renders empty.
+func dropObservedUnavailable(entries []HealthUnavailable, gameObserved, smapiObserved bool) []HealthUnavailable {
+	kept := make([]HealthUnavailable, 0, len(entries))
+	for _, entry := range entries {
+		if gameObserved && entry.Name == "Game detection" {
+			continue
+		}
+		if smapiObserved && entry.Name == "SMAPI detection" {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+// smapiLogDirCandidates names the OS ErrorLogs directories a last-run
+// SMAPI-latest.txt may live in, highest-priority first. It is a stubbable
+// variable so tests never depend on ambient machine state: the default
+// consults the OS user-config locations, while tests point it at temp dirs.
+var smapiLogDirCandidates = defaultSmapiLogDirCandidates
+
+// defaultSmapiLogDirCandidates reports the per-OS SMAPI log locations: the
+// user-config StardewValley/ErrorLogs dir (Windows %APPDATA%, Unix
+// $XDG_CONFIG_HOME or ~/.config) plus the Xbox-app LocalCache variant. All
+// are best-effort hints — absent dirs simply yield no header.
+func defaultSmapiLogDirCandidates() []string {
+	var dirs []string
+	if config, err := os.UserConfigDir(); err == nil && config != "" {
+		dirs = append(dirs, filepath.Join(config, "StardewValley", "ErrorLogs"))
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		dirs = append(dirs, filepath.Join(xdg, "StardewValley", "ErrorLogs"))
+	} else if home := os.Getenv("HOME"); home != "" {
+		dirs = append(dirs, filepath.Join(home, ".config", "StardewValley", "ErrorLogs"))
+	}
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		matches, _ := filepath.Glob(filepath.Join(local, "Packages", "ConcernedApe.StardewValleyPC_*", "LocalCache", "StardewValley", "ErrorLogs"))
+		dirs = append(dirs, matches...)
+	}
+	return dirs
+}
+
+// probeLogHeader tries each candidate ErrorLogs dir via os.DirFS and
+// returns the first parsable SMAPI-latest.txt header. Every failure
+// degrades to unknown (ok=false), never an error: the last run is a
+// fallback source, never a refusal.
+func probeLogHeader() (smapi, game string, ok bool) {
+	for _, dir := range smapiLogDirCandidates() {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		if smapi, game, ok := detect.ReadLogHeader(os.DirFS(dir)); ok {
+			return smapi, game, ok
+		}
+	}
+	return "", "", false
+}
+
+// probeGameReport detects the game dir at canonical and folds in the
+// best-effort last-run log header. Detection refusals (GAME_*) return
+// untouched — callers surface them, never a fabricated report.
+func probeGameReport(canonical string) (detect.Report, error) {
+	report, err := detect.Detect(os.DirFS(canonical))
+	if err != nil {
+		return detect.Report{}, err
+	}
+	if smapi, game, ok := probeLogHeader(); ok {
+		report.ApplyLogHeader(smapi, game)
+	}
+	return report, nil
+}
+
+// versionsToPersist maps a detection report onto the nullable row columns:
+// gameVersion is nil exactly when the game version is unknown; smapiVersion
+// is nil when unknown OR conflicted — a conflict trusts none of its
+// sources, so nothing is stored. A log-derived resolution is stored
+// plainly (the row has no provenance column by #17): whether a version came
+// from disk or the last run is re-derived by a fresh probe at Health time
+// (see observePrimaryGame); when no fresh probe is possible the fallback
+// sections say so instead of claiming on-disk truth (see sectionsFromRow).
+func versionsToPersist(report detect.Report) (gameVersion, smapiVersion *string) {
+	if report.GameVersion != "" {
+		gameVersion = &report.GameVersion
+	}
+	if report.Version.Conflict == "" && report.Version.Resolved != "" {
+		smapiVersion = &report.Version.Resolved
+	}
+	return gameVersion, smapiVersion
+}
+
+// sectionsFromReport renders the observed Health game/SMAPI sections from a
+// fresh probe of the primary install. The SMAPI detail comes from
+// Versions.Detail(); when the game version itself fell back to the last-run
+// log, the game caveat is appended so a log-derived game version is never
+// presented as installed truth.
+func sectionsFromReport(row store.GameInstall, report detect.Report, installsKnown int) (*HealthGameSection, *HealthSmapiSection) {
+	game := &HealthGameSection{
+		Path:          row.Path,
+		Source:        row.Source,
+		InstallsKnown: installsKnown,
+	}
+	if report.GameVersion != "" {
+		version := report.GameVersion
+		game.GameVersion = &version
+	}
+	detail := report.Version.Detail()
+	if report.GameFromLog && report.GameVersion != "" {
+		detail += "; game version from the last SMAPI run, not installed truth"
+	}
+	smapi := &HealthSmapiSection{
+		State:   string(report.Smapi),
+		Detail:  detail,
+		Missing: append([]string{}, report.Missing...),
+	}
+	if report.Version.Conflict == "" && report.Version.Resolved != "" {
+		version := report.Version.Resolved
+		smapi.Version = &version
+	}
+	return game, smapi
+}
+
+// sectionsFromRow renders Health sections from the durable row alone when a
+// fresh probe fails: stored versions (nil = unknown), SMAPI state from the
+// stored entry point (present → complete, absent → absent, mirroring
+// toView), and an honest detail. Missing stays empty, never null.
+func sectionsFromRow(row store.GameInstall, installsKnown int) (*HealthGameSection, *HealthSmapiSection) {
+	game := &HealthGameSection{
+		Path:          row.Path,
+		Source:        row.Source,
+		GameVersion:   row.GameVersion,
+		InstallsKnown: installsKnown,
+	}
+	state := "absent"
+	if row.SmapiExePath != nil {
+		state = "complete"
+	}
+	smapi := &HealthSmapiSection{State: state, Version: row.SmapiVersion, Detail: "SMAPI version unknown", Missing: []string{}}
+	if row.SmapiVersion != nil {
+		smapi.Detail = "SMAPI " + *row.SmapiVersion + " last recorded; on-disk state unobservable right now"
+	} else if state == "absent" {
+		smapi.Detail = "No SMAPI detected — the game runs unmodded"
+	}
+	return game, smapi
+}
+
+// observePrimaryGame resolves the primary Game Installation row and
+// fresh-probes it: Detect over os.DirFS plus the best-effort last-run log
+// header. Any failure (no store, no primary, vanished dir, detection
+// refusal) falls back to the row values or to unobserved (nil sections) —
+// Health never fails and never reports a guess. NO new findings here:
+// stale/partial/conflict/mismatch findings belong to #27.
+func (s *ApplicationService) observePrimaryGame() (*HealthGameSection, *HealthSmapiSection) {
+	if s.db == nil {
+		return nil, nil
+	}
+	ctx := context.Background()
+	svc := settings.New(s.db.DB())
+	installs, err := store.ListGameInstalls(s.db.DB())
+	if err != nil || len(installs) == 0 {
+		return nil, nil
+	}
+	primaryID := s.primaryInstallID(ctx, svc, installs)
+	if primaryID == 0 {
+		return nil, nil
+	}
+	var row store.GameInstall
+	for _, install := range installs {
+		if install.ID == primaryID {
+			row = install
+			break
+		}
+	}
+	if row.ID == 0 {
+		return nil, nil
+	}
+	canonical, err := store.CanonicalGamePath(row.Path)
+	if err != nil {
+		canonical = row.Path
+	}
+	report, err := probeGameReport(canonical)
+	if err != nil {
+		return sectionsFromRow(row, len(installs))
+	}
+	return sectionsFromReport(row, report, len(installs))
 }
 
 // Health reports only what the backend can observe: the constructed identity,
@@ -210,6 +428,9 @@ func (s *ApplicationService) Health() HealthReport {
 			Action:   fmt.Sprintf("Restart the application; if it persists, restore the newest backup over %s and restart, or move %s aside and restart", report.Database.Path, report.Database.Path),
 		})
 	}
+	game, smapi := s.observePrimaryGame()
+	report.Game, report.Smapi = game, smapi
+	report.Unavailable = dropObservedUnavailable(report.Unavailable, game != nil, smapi != nil)
 	return report
 }
 
@@ -437,11 +658,13 @@ func (s *ApplicationService) maybeAdoptPrimary(ctx context.Context, svc *setting
 }
 
 // AddGameInstall canonicalises path Go-side, probes os.DirFS(path) through
-// the same detector the automatic pass uses, and upserts the durable row:
-// re-picks refresh instead of duplicating, versions stay nil (unknown by
-// contract), and a second install never steals a healthy primary. Refusals
-// carry the typed GAME_* codes with per-code recovery copy. A nil store
-// refuses with SETTING_UNAVAILABLE.
+// the same detector the automatic pass uses, folds in the best-effort
+// last-run log header, and upserts the durable row: re-picks refresh instead
+// of duplicating (versions included), an unknown version persists as nil,
+// and a second install never steals a healthy primary. A SMAPI conflict
+// trusts none of its sources and persists nothing. Refusals carry the typed
+// GAME_* codes with per-code recovery copy. A nil store refuses with
+// SETTING_UNAVAILABLE.
 func (s *ApplicationService) AddGameInstall(path string) (GameInstallView, error) {
 	if s.db == nil {
 		return GameInstallView{}, apperror.NewRecoverable(apperror.CodeSettingUnavailable, "settings unavailable", "settings unavailable: service constructed without a database handle")
@@ -450,7 +673,7 @@ func (s *ApplicationService) AddGameInstall(path string) (GameInstallView, error
 	if err != nil {
 		return GameInstallView{}, apperror.NewRecoverable(apperror.CodeGameInvalid, "game folder is unreadable", fmt.Sprintf("game folder is unreadable: %s", err))
 	}
-	report, err := detect.Detect(os.DirFS(canonical))
+	report, err := probeGameReport(canonical)
 	if err != nil {
 		return GameInstallView{}, err
 	}
@@ -459,8 +682,9 @@ func (s *ApplicationService) AddGameInstall(path string) (GameInstallView, error
 		entry := report.SmapiExePath
 		smapiExe = &entry
 	}
+	gameVersion, smapiVersion := versionsToPersist(report)
 	ctx := context.Background()
-	install, err := store.UpsertGameInstall(s.db.DB(), canonical, "manual", smapiExe, nil, nil)
+	install, err := store.UpsertGameInstall(s.db.DB(), canonical, "manual", smapiExe, gameVersion, smapiVersion)
 	if err != nil {
 		return GameInstallView{}, err
 	}
