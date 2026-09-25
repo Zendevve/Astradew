@@ -22,6 +22,7 @@ vi.mock("../../bindings/github.com/Zendevve/astradew/internal/app", () => ({
     GameInstalls: vi.fn(),
     AddGameInstall: vi.fn(),
     SetPrimaryGameInstall: vi.fn(),
+    DetectNow: vi.fn(),
   },
 }));
 
@@ -33,6 +34,7 @@ const settingsMock = vi.mocked(ApplicationService.Settings);
 const installsMock = vi.mocked(ApplicationService.GameInstalls);
 const addInstallMock = vi.mocked(ApplicationService.AddGameInstall);
 const setPrimaryMock = vi.mocked(ApplicationService.SetPrimaryGameInstall);
+const detectMock = vi.mocked(ApplicationService.DetectNow);
 
 const dataRoot = "C:\\Users\\test\\AppData\\Local\\Astradew";
 const dataPaths = {
@@ -96,6 +98,14 @@ beforeEach(() => {
     isPrimary: true,
   });
   setPrimaryMock.mockResolvedValue(undefined);
+  detectMock.mockResolvedValue({
+    found: [],
+    adopted: null,
+    pointerOutcome: "kept-healthy",
+    needsChoice: false,
+    message: "No Stardew Valley install found. Choose the game folder manually.",
+    installsKnown: 0,
+  });
   window.location.hash = "#/settings";
 });
 
@@ -106,15 +116,14 @@ afterEach(() => {
 });
 
 describe("game installs group", () => {
-  it("renders the group with empty state and disabled Detect", async () => {
+  it("renders the group with empty state and an enabled Detect", async () => {
     render(<App />);
     await screen.findByText("Astradew");
 
     const group = await screen.findByRole("region", { name: "Game installs" });
     expect(within(group).getByText("No game configured yet. Run Detect now or choose the game folder.")).not.toBeNull();
     const detect = within(group).getByRole("button", { name: "Detect now" });
-    expect(detect.hasAttribute("disabled")).toBe(true);
-    expect(within(group).getByText("Auto-discovery lands in a later ticket.")).not.toBeNull();
+    expect(detect.hasAttribute("disabled")).toBe(false);
     expect(within(group).getByLabelText("Choose game folder…")).not.toBeNull();
   });
 
@@ -234,6 +243,93 @@ describe("game installs group", () => {
     await screen.findByText("Astradew");
     const group = await screen.findByRole("region", { name: "Game installs" });
     await user.click(within(group).getByRole("button", { name: "Use this" }));
+    expect(setPrimaryMock).toHaveBeenCalledWith(2);
+  });
+
+  it("Detect now shows a busy state, re-reads the list, and reports zero finds", async () => {
+    installsMock.mockResolvedValue([]);
+    detectMock.mockResolvedValue({
+      found: [],
+      adopted: null,
+      pointerOutcome: "kept-healthy",
+      needsChoice: false,
+      message: "No Stardew Valley install found. Choose the game folder manually.",
+      installsKnown: 0,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Astradew");
+    const group = await screen.findByRole("region", { name: "Game installs" });
+    await user.click(within(group).getByRole("button", { name: "Detect now" }));
+    expect(detectMock).toHaveBeenCalled();
+    const result = await within(group).findByRole("status");
+    expect(result.textContent).toContain("Choose the game folder manually");
+    expect(installsMock.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("Detect now reports many finds with per-row choosers", async () => {
+    installsMock.mockResolvedValue([
+      {
+        id: 1,
+        path: "C:\\Steam\\Stardew Valley",
+        source: "steam",
+        smapiExePath: null,
+        gameVersion: null,
+        smapiVersion: null,
+        smapiState: "absent",
+        isPrimary: false,
+      },
+      {
+        id: 2,
+        path: "C:\\GOG Games\\Stardew Valley",
+        source: "gog",
+        smapiExePath: null,
+        gameVersion: null,
+        smapiVersion: null,
+        smapiState: "absent",
+        isPrimary: false,
+      },
+    ]);
+    detectMock.mockResolvedValue({
+      found: [
+        {
+          id: 1,
+          path: "C:\\Steam\\Stardew Valley",
+          source: "steam",
+          smapiExePath: null,
+          gameVersion: null,
+          smapiVersion: null,
+          smapiState: "absent",
+          isPrimary: false,
+        },
+        {
+          id: 2,
+          path: "C:\\GOG Games\\Stardew Valley",
+          source: "gog",
+          smapiExePath: null,
+          gameVersion: null,
+          smapiVersion: null,
+          smapiState: "absent",
+          isPrimary: false,
+        },
+      ],
+      adopted: null,
+      pointerOutcome: "needs-choice",
+      needsChoice: true,
+      message: "Several installs found. Pick the primary with the per-row chooser.",
+      installsKnown: 2,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Astradew");
+    const group = await screen.findByRole("region", { name: "Game installs" });
+    await user.click(within(group).getByRole("button", { name: "Detect now" }));
+    const result = await within(group).findByRole("status");
+    expect(result.textContent).toContain("Several installs found");
+    expect(result.textContent).toContain("per-row chooser");
+    const choosers = within(group).getAllByRole("button", { name: "Use this" });
+    expect(choosers.length).toBe(2);
+    await user.click(choosers[1]);
     expect(setPrimaryMock).toHaveBeenCalledWith(2);
   });
 });

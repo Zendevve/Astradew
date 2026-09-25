@@ -7,6 +7,7 @@ export {
 };
 
 export type {
+    DetectNowResult,
     GameInstallView,
     HealthDatabase,
     HealthDirectory,

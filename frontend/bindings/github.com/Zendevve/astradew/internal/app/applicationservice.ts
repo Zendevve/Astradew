@@ -37,6 +37,20 @@ export function AddGameInstall(path: string): $CancellablePromise<$models.GameIn
 }
 
 /**
+ * DetectNow probes every enumerated candidate (Steam roots plus alternates,
+ * GOG/default locations, the macOS standard bundle) through os.DirFS and
+ * Detect, records every valid install, and resolves the pointer without
+ * ever stealing a healthy one. Zero finds leave the pointer untouched and
+ * guide to manual selection; one find fills an unset or stale pointer only;
+ * many finds never auto-pick — the pointer stays, the summary reports
+ * needs-choice, and the per-row choosers decide. A healthy pointer survives
+ * even a failed pass. A nil store refuses with SETTING_UNAVAILABLE.
+ */
+export function DetectNow(): $CancellablePromise<$models.DetectNowResult> {
+    return $Call.ByID(3404725803);
+}
+
+/**
  * GameInstalls lists every known game installation with its primary marker.
  * A nil store refuses with recoverable SETTING_UNAVAILABLE, never an empty
  * list fabrication.

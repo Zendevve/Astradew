@@ -24,6 +24,7 @@ vi.mock("../../bindings/github.com/Zendevve/astradew/internal/app", () => ({
     GameInstalls: vi.fn(),
     AddGameInstall: vi.fn(),
     SetPrimaryGameInstall: vi.fn(),
+    DetectNow: vi.fn(),
   },
 }));
 
@@ -37,6 +38,7 @@ const setSettingMock = vi.mocked(ApplicationService.SetSetting);
 const installsMock = vi.mocked(ApplicationService.GameInstalls);
 const addInstallMock = vi.mocked(ApplicationService.AddGameInstall);
 const setPrimaryMock = vi.mocked(ApplicationService.SetPrimaryGameInstall);
+const detectMock = vi.mocked(ApplicationService.DetectNow);
 const dataRoot = "C:\\Users\\test\\AppData\\Local\\Astradew";
 const healthyReport = {
   name: "Astradew",
@@ -108,6 +110,14 @@ beforeEach(() => {
     isPrimary: true,
   });
   setPrimaryMock.mockResolvedValue(undefined);
+  detectMock.mockResolvedValue({
+    found: [],
+    adopted: null,
+    pointerOutcome: "kept-healthy",
+    needsChoice: false,
+    message: "No Stardew Valley install found. Choose the game folder manually.",
+    installsKnown: 0,
+  });
 });
 
 afterEach(() => {

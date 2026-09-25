@@ -41,6 +41,10 @@ const (
 	// restartPort serves the phase-0 acceptance run: first start plus a
 	// real restart over one data home on one port.
 	restartPort = 19313
+	// gameInstallPort serves the game-install tracer: add through the
+	// interface, refuse a broken folder through the interface, then a
+	// real restart over one data home on one port.
+	gameInstallPort = 19314
 )
 
 // Timeouts are generous because WebView2 cold start on Windows is slow: the
@@ -64,7 +68,7 @@ func TestProductionAppRendersGoIdentity(t *testing.T) {
 	// single shared WebView2 browser environment, so the two tests run in
 	// sequence. Port constants stay fixed for determinism.
 	proc := launchApp(t, binary, dataHome, userData, debugPort)
-	defer killApp(t, proc)
+	defer killApp(t, proc, debugPort)
 
 	target := waitForPageTarget(t, debugPort)
 	assertRenderedText(t, target, "Astradew", "Version 0.0.0")
@@ -80,7 +84,7 @@ func TestProductionAppRendersHealthReport(t *testing.T) {
 	userData := t.TempDir()
 
 	proc := launchApp(t, binary, dataHome, userData, profilePort)
-	defer killApp(t, proc)
+	defer killApp(t, proc, profilePort)
 
 	target := waitForPageTarget(t, profilePort)
 	if err := navigate(t, target, "#/health"); err != nil {
@@ -108,7 +112,8 @@ func TestProductionAppRestartsWithSettingPersisted(t *testing.T) {
 	dataHome := t.TempDir()
 
 	// Launch 1: fresh data home, prove initialisation completed.
-	proc := launchApp(t, binary, dataHome, t.TempDir(), restartPort)
+	proc1 := launchApp(t, binary, dataHome, t.TempDir(), restartPort)
+	defer killApp(t, proc1, restartPort)
 	target := waitForPageTarget(t, restartPort)
 	assertRenderedText(t, target, "Astradew", "Version 0.0.0")
 
@@ -118,11 +123,11 @@ func TestProductionAppRestartsWithSettingPersisted(t *testing.T) {
 	dbPath := filepath.Join(dataHome, "Astradew", "database", "astradew.db")
 	firstInfo, err := os.Stat(dbPath)
 	if err != nil {
-		killApp(t, proc)
+		killApp(t, proc1, restartPort)
 		t.Fatalf("database file %s missing after first start: %v", dbPath, err)
 	}
 	if firstInfo.Size() == 0 {
-		killApp(t, proc)
+		killApp(t, proc1, restartPort)
 		t.Fatalf("database file %s is empty after first start", dbPath)
 	}
 
@@ -132,7 +137,7 @@ func TestProductionAppRestartsWithSettingPersisted(t *testing.T) {
 	// line and the health report, while the startup record renders in its
 	// own section on every route.
 	if err := navigate(t, target, "#/health"); err != nil {
-		killApp(t, proc)
+		killApp(t, proc1, restartPort)
 		t.Fatalf("navigating to #/health on first start: %v", err)
 	}
 	assertRenderedPageText(t, target, nil, "schema version 1", "Startup task succeeded")
@@ -145,7 +150,7 @@ func TestProductionAppRestartsWithSettingPersisted(t *testing.T) {
 	// through SetSetting then re-reads — so both the drive and the read-back
 	// poll inside the page until their condition holds or they time out.
 	if err := navigate(t, target, "#/settings"); err != nil {
-		killApp(t, proc)
+		killApp(t, proc1, restartPort)
 		t.Fatalf("navigating to #/settings: %v", err)
 	}
 	driveThemeDark := `(() => new Promise((resolve) => {
@@ -173,10 +178,10 @@ func TestProductionAppRestartsWithSettingPersisted(t *testing.T) {
 		attempt();
 	}))()`
 	if result, err := evaluateInPage(t, target, driveThemeDark); err != nil {
-		killApp(t, proc)
+		killApp(t, proc1, restartPort)
 		t.Fatalf("driving the theme row through the interface: %v", err)
 	} else if result != "ok" {
-		killApp(t, proc)
+		killApp(t, proc1, restartPort)
 		t.Fatalf("theme row driver reported %q; want \"ok\"", result)
 	}
 	// The save round-trips through SetSetting then re-reads (load onSaved),
@@ -191,16 +196,16 @@ func TestProductionAppRestartsWithSettingPersisted(t *testing.T) {
 	// renders on every route, so the #/settings text already carries it.
 	firstText, err := evaluateInPage(t, target, `(() => document.body.innerText)()`)
 	if err != nil {
-		killApp(t, proc)
+		killApp(t, proc1, restartPort)
 		t.Fatalf("reading first-start page text: %v", err)
 	}
 	firstUpdated := startupUpdatedAt(t, firstText, nil, "first")
 	// Kill the real process, then relaunch the same data home. The fresh
 	// browser profile is fine — persistence lives in the data home, not
 	// the webview profile.
-	killApp(t, proc)
-	proc = launchApp(t, binary, dataHome, t.TempDir(), restartPort, evidence...)
-	defer killApp(t, proc)
+	killApp(t, proc1, restartPort)
+	proc2 := launchApp(t, binary, dataHome, t.TempDir(), restartPort, evidence...)
+	defer killApp(t, proc2, restartPort)
 	// The setting must survive the restart: re-read path shows dark.
 	secondTarget := waitForPageTarget(t, restartPort, evidence...)
 	if err := navigate(t, secondTarget, "#/settings"); err != nil {
@@ -235,6 +240,182 @@ func TestProductionAppRestartsWithSettingPersisted(t *testing.T) {
 	}
 	if secondUpdated <= firstUpdated {
 		t.Fatalf("startup record did not advance across restart%s: first %q, second %q — the second start did not append to the existing store", evidenceSuffix(evidence), firstUpdated, secondUpdated)
+	}
+}
+
+// TestProductionAppAddsGameInstallThroughInterface is the game-install
+// tracer: one isolated data home, a valid Game Installation added through
+// the interface the player uses, a broken-condition refusal through the
+// same interface, and a real process restart over the same data home.
+// Launch 1 seeds a temp-dir fixture game on the real filesystem (Stardew
+// Valley.dll bytes plus one UniqueID-gated bundled manifest,
+// Mods/ConsoleCommands SMAPI.ConsoleCommands 4.5.2, the same shape as
+// seedGameDir/seedManifest in internal/app), fills #game-folder-path with
+// it and clicks Add, then proves the row is observed in Settings (path,
+// Primary marker, version 4.5.2) and in Health (path, version 4.5.2). The
+// broken condition (empty dir, no DLL) added the same way renders its
+// typed GAME_NOT_FOUND refusal through the interface. The restart then
+// proves the same row, primary marker, and version read back. Temp fixture
+// dirs plus an isolated temp data home keep the whole suite CI-safe with
+// no game installed. The detector beneath is covered hermetically by the
+// store/detect unit tests; this tracer proves the interface round trip.
+func TestProductionAppAddsGameInstallThroughInterface(t *testing.T) {
+	binary := buildApp(t)
+	dataHome := t.TempDir()
+
+	fixtures := t.TempDir()
+	gameDir := filepath.Join(fixtures, "game")
+	seedE2EGameFixture(t, gameDir)
+	brokenDir := filepath.Join(fixtures, "empty")
+	if err := os.MkdirAll(brokenDir, 0o755); err != nil {
+		t.Fatalf("seeding broken fixture dir: %v", err)
+	}
+
+	// Launch 1: fresh data home, prove initialisation completed.
+	proc1 := launchApp(t, binary, dataHome, t.TempDir(), gameInstallPort)
+	defer killApp(t, proc1, gameInstallPort)
+	target := waitForPageTarget(t, gameInstallPort)
+	assertRenderedText(t, target, "Astradew", "Version 0.0.0")
+
+	// Add the valid fixture through the interface: fill
+	// #game-folder-path, click Add. The add round-trips through
+	// AddGameInstall then re-reads GameInstalls, so the read-back polls
+	// until the row lands with the fixture's manifest version.
+	if err := navigate(t, target, "#/settings"); err != nil {
+		killApp(t, proc1, gameInstallPort)
+		t.Fatalf("navigating to #/settings: %v", err)
+	}
+	driveGameFolderAdd(t, target, gameDir, nil)
+	assertRenderedPageText(t, target, nil, gameDir, "Primary", "4.5.2")
+	evidence := []string{"first start added " + gameDir + " through the interface and rendered it with the Primary marker and version 4.5.2"}
+
+	// Health observes the same row through #/health.
+	if err := navigate(t, target, "#/health"); err != nil {
+		killApp(t, proc1, gameInstallPort)
+		t.Fatalf("navigating to #/health: %v", err)
+	}
+	assertRenderedPageText(t, target, nil, gameDir, "4.5.2")
+
+	// The broken condition refuses through the interface with its typed
+	// code: an empty dir carries no Stardew Valley.dll, so detection
+	// refuses GAME_NOT_FOUND and the picker renders the code plus the
+	// recovery copy naming the DLL.
+	if err := navigate(t, target, "#/settings"); err != nil {
+		killApp(t, proc1, gameInstallPort)
+		t.Fatalf("navigating back to #/settings: %v", err)
+	}
+	driveGameFolderAdd(t, target, brokenDir, nil)
+	assertRenderedPageText(t, target, nil, "GAME_NOT_FOUND", "Stardew Valley.dll")
+
+	// Kill the real process, then relaunch the same data home. The fresh
+	// browser profile is fine — persistence lives in the data home, not
+	// the webview profile.
+	killApp(t, proc1, gameInstallPort)
+	proc2 := launchApp(t, binary, dataHome, t.TempDir(), gameInstallPort, evidence...)
+	defer killApp(t, proc2, gameInstallPort)
+
+	// The install survives the restart: same row, same primary marker,
+	// same version field.
+	secondTarget := waitForPageTarget(t, gameInstallPort, evidence...)
+	if err := navigate(t, secondTarget, "#/settings"); err != nil {
+		t.Fatalf("navigating to #/settings after restart%s: %v", evidenceSuffix(evidence), err)
+	}
+	assertRenderedPageText(t, secondTarget, evidence, gameDir, "Primary", "4.5.2")
+	if err := navigate(t, secondTarget, "#/health"); err != nil {
+		t.Fatalf("navigating to #/health after restart%s: %v", evidenceSuffix(evidence), err)
+	}
+	assertRenderedPageText(t, secondTarget, evidence, gameDir, "4.5.2")
+}
+
+// seedE2EGameFixture writes a minimal valid game directory on the real
+// filesystem: Stardew Valley.dll (garbage bytes read as unknown game
+// version, mirroring seedGameDir in internal/app) plus one UniqueID-gated
+// bundled manifest (Mods/ConsoleCommands/manifest.json carrying
+// SMAPI.ConsoleCommands Version 4.5.2, mirroring seedManifest in
+// internal/app) so a version field exists. The detector resolves 4.5.2
+// from that manifest (TestAddGameInstallManifestVersionPersists pins the
+// plumbing); the tracer asserts the 4.5.2 line through the interface.
+func seedE2EGameFixture(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("seeding fixture dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Stardew Valley.dll"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("seeding game DLL: %v", err)
+	}
+	payload, err := json.Marshal(map[string]string{
+		"Name":              "ConsoleCommands",
+		"Author":            "test",
+		"Version":           "4.5.2",
+		"UniqueID":          "SMAPI.ConsoleCommands",
+		"MinimumApiVersion": "",
+	})
+	if err != nil {
+		t.Fatalf("marshalling fixture manifest: %v", err)
+	}
+	modDir := filepath.Join(dir, "Mods", "ConsoleCommands")
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
+		t.Fatalf("seeding fixture manifest dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "manifest.json"), payload, 0o600); err != nil {
+		t.Fatalf("seeding fixture manifest: %v", err)
+	}
+}
+
+// driveGameFolderAdd fills #game-folder-path with path and clicks Add
+// through the interface the player uses. The picker row renders only after
+// GameInstalls resolves, the Add button stays disabled until the draft
+// state commits, and the click reads that committed state — so the driver
+// polls inside the page until the row is ready and the click lands, then
+// waits a beat for React to commit before clicking.
+func driveGameFolderAdd(t *testing.T, debuggerURL, path string, evidence []string) {
+	t.Helper()
+
+	expr := fmt.Sprintf(`(() => new Promise((resolve) => {
+		const path = %s;
+		const deadline = Date.now() + 25000;
+		const attempt = () => {
+			const input = document.getElementById('game-folder-path');
+			if (!input) {
+				if (Date.now() > deadline) {
+					resolve('game folder picker never appeared: ' + document.body.innerText.slice(0, 500));
+					return;
+				}
+				setTimeout(attempt, 250);
+				return;
+			}
+			input.focus();
+			Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, path);
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+			const add = Array.from(document.querySelectorAll('.game-installs .picker-row button')).find((node) => node.textContent === 'Add' && !node.disabled);
+			if (add) {
+				setTimeout(() => {
+					const live = Array.from(document.querySelectorAll('.game-installs .picker-row button')).find((node) => node.textContent === 'Add' && !node.disabled);
+					if (live) {
+						live.click();
+						resolve('ok');
+					} else if (Date.now() > deadline) {
+						resolve('Add never enabled: ' + document.body.innerText.slice(0, 500));
+					} else {
+						setTimeout(attempt, 250);
+					}
+				}, 400);
+				return;
+			}
+			if (Date.now() > deadline) {
+				resolve('Add never enabled: ' + document.body.innerText.slice(0, 500));
+				return;
+			}
+			setTimeout(attempt, 250);
+		};
+		attempt();
+	}))()`, quoteJS(path))
+	result, err := evaluateInPage(t, debuggerURL, expr)
+	if err != nil {
+		t.Fatalf("driving the game folder picker through the interface%s: %v", evidenceSuffix(evidence), err)
+	}
+	if result != "ok" {
+		t.Fatalf("game folder driver reported %q; want \"ok\"%s", result, evidenceSuffix(evidence))
 	}
 }
 
@@ -368,22 +549,21 @@ func assertRenderedPageText(t *testing.T, debuggerURL string, evidence []string,
 func buildApp(t *testing.T) string {
 	t.Helper()
 
-	binary := filepath.Join("..", "bin", "astradew.exe")
 	if runtime.GOOS != "windows" {
 		t.Skipf("e2e harness drives the Windows WebView2 build, running on %s", runtime.GOOS)
 	}
+	abs, err := filepath.Abs(filepath.Join("..", "bin", "astradew.exe"))
+	if err != nil {
+		t.Fatalf("resolving binary path: %v", err)
+	}
 	args := []string{"build", "-tags", "production", "-trimpath", "-buildvcs=false",
-		"-ldflags=-w -s -H windowsgui", "-o", binary, "."}
+		"-ldflags=-w -s -H windowsgui", "-o", abs, "."}
 	cmd := exec.Command("go", args...)
 	cmd.Dir = ".."
 	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("building production binary: %v\n%s", err, out)
-	}
-	abs, err := filepath.Abs(filepath.Join("..", "bin", "astradew.exe"))
-	if err != nil {
-		t.Fatalf("resolving binary path: %v", err)
 	}
 	return abs
 }
@@ -448,10 +628,27 @@ func launchApp(t *testing.T, binary, dataHome, userData string, port int, eviden
 }
 
 // killApp terminates the app on every exit path so no window outlives the run.
-func killApp(t *testing.T, cmd *exec.Cmd) {
+// It then polls until the DevTools endpoint on port goes quiet (deadline
+// ~15s in pollInterval steps) so a relaunch on the same fixed port never
+// attaches to a stale holder; on Windows a still-listening server is
+// force-killed by process tree before giving up. cmd.Wait reaps always.
+func killApp(t *testing.T, cmd *exec.Cmd, port int) {
 	t.Helper()
-
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
 	_ = cmd.Process.Kill()
+	deadline := time.Now().Add(15 * time.Second)
+	for endpointUp(port) && time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+	}
+	if endpointUp(port) && runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/F", "/T", "/PID", itoa(cmd.Process.Pid)).Run()
+		deadline = time.Now().Add(15 * time.Second)
+		for endpointUp(port) && time.Now().Before(deadline) {
+			time.Sleep(pollInterval)
+		}
+	}
 	_ = cmd.Wait()
 }
 

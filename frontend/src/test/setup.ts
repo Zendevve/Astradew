@@ -21,6 +21,7 @@ vi.mock("../../bindings/github.com/Zendevve/astradew/internal/app", () => ({
     GameInstalls: vi.fn(),
     AddGameInstall: vi.fn(),
     SetPrimaryGameInstall: vi.fn(),
+    DetectNow: vi.fn(),
   },
 }));
 
@@ -92,3 +93,11 @@ vi.mocked(ApplicationService.AddGameInstall).mockResolvedValue({
   isPrimary: true,
 });
 vi.mocked(ApplicationService.SetPrimaryGameInstall).mockResolvedValue(undefined);
+vi.mocked(ApplicationService.DetectNow).mockResolvedValue({
+  found: [],
+  adopted: null,
+  pointerOutcome: "kept-healthy",
+  needsChoice: false,
+  message: "No Stardew Valley install found. Choose the game folder manually.",
+  installsKnown: 0,
+});

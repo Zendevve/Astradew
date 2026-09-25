@@ -33,7 +33,6 @@ export default function SettingsSection() {
 
   const load = (isCancelled?: () => boolean) => {
     const cancelled = isCancelled ?? (() => false);
-    setState({ status: "loading" });
     setInstallsFailed(null);
     ApplicationService.Settings().then(
       (settings) => {
@@ -125,6 +124,13 @@ function refusalCopy(code: string | null, details: string): string {
   }
 }
 
+/** Detect state: idle, running, a result summary, or a typed failure. */
+type DetectState =
+  | { status: "idle" }
+  | { status: "running" }
+  | { status: "done"; message: string; needsChoice: boolean }
+  | { status: "failed"; message: string };
+
 /** Add state: idle, adding, or a typed refusal to display. */
 type AddState =
   | { status: "idle" }
@@ -134,8 +140,9 @@ type AddState =
 /**
  * GameInstallsGroup is the single picker flow: resolved primary card, path
  * text entry plus add button (the automation-drivable picker), installs
- * list with Primary markers and Use-this choices, and a Detect-now button
- * present but disabled (auto-discovery lands in a later ticket).
+ * list with Primary markers and Use-this choices, and an enabled Detect-now
+ * button that runs the automatic discovery pass (zero/one/many copy with
+ * per-row choosers when the pointer needs a choice).
  */
 function GameInstallsGroup({
   installs,
@@ -150,6 +157,7 @@ function GameInstallsGroup({
 }) {
   const [draft, setDraft] = useState("");
   const [add, setAdd] = useState<AddState>({ status: "idle" });
+  const [detect, setDetect] = useState<DetectState>({ status: "idle" });
 
   const submit = () => {
     const path = draft.trim();
@@ -198,6 +206,27 @@ function GameInstallsGroup({
     );
   };
 
+  const runDetect = () => {
+    setDetect({ status: "running" });
+    ApplicationService.DetectNow().then(
+      (result) => {
+        setDetect({
+          status: "done",
+          message: result.message,
+          needsChoice: result.needsChoice,
+        });
+        onChanged();
+      },
+      (error: unknown) => {
+        const payload = appErrorPayload(error);
+        const details =
+          payload?.details ??
+          (error instanceof Error ? error.message : String(error));
+        setDetect({ status: "failed", message: details });
+      },
+    );
+  };
+
   return (
     <section className="game-installs" aria-label="Game installs">
       <h2>Game installs</h2>
@@ -241,13 +270,21 @@ function GameInstallsGroup({
         </p>
       ) : null}
       <div className="detect-row">
-        <Button disabled aria-describedby="detect-reason">
-          Detect now
+        <Button onClick={runDetect} disabled={detect.status === "running"}>
+          {detect.status === "running" ? "Detecting…" : "Detect now"}
         </Button>
-        <p className="control-reason" id="detect-reason">
-          Auto-discovery lands in a later ticket.
-        </p>
       </div>
+      {detect.status === "done" ? (
+        <p role="status" className="detect-result">
+          {detect.message}
+          {detect.needsChoice ? " Pick the primary with the per-row chooser." : ""}
+        </p>
+      ) : null}
+      {detect.status === "failed" ? (
+        <p role="alert" className="identity-error">
+          Detection failed: {detect.message}
+        </p>
+      ) : null}
       {installs.length > 0 ? (
         <ul>
           {installs.map((row) => (
