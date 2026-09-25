@@ -297,6 +297,168 @@ func TestParseUpdateKeysBlanksFiltered(t *testing.T) {
 	}
 }
 
+func TestParseLegacyContentPackForStringCoerced(t *testing.T) {
+	data := `{"Name":"N","Version":"1.0.0","UniqueID":"A.B","ContentPackFor":"Pathoschild.ContentPatcher"}`
+	m, v, errs := Parse([]byte(data))
+	if v != VerdictPartial {
+		t.Fatalf("verdict = %q, want partial (errs=%v)", v, errs)
+	}
+	if m.ContentPackFor == nil || m.ContentPackFor.UniqueID != "Pathoschild.ContentPatcher" {
+		t.Fatalf("host not coerced: %+v", m.ContentPackFor)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Message, "legacy") {
+		t.Fatalf("errs = %v, want one legacy-coercion warning", errs)
+	}
+}
+
+func TestParseHostMinimumVersion(t *testing.T) {
+	data := `{"Name":"N","Version":"1.0.0","UniqueID":"A.B","ContentPackFor":{"UniqueID":"Pathoschild.ContentPatcher","MinimumVersion":"1.9"}}`
+	m, v, errs := Parse([]byte(data))
+	if v != VerdictValid {
+		t.Fatalf("verdict = %q, want valid (errs=%v)", v, errs)
+	}
+	if m.ContentPackFor == nil || m.ContentPackFor.MinimumVersion != "1.9" {
+		t.Fatalf("host floor = %+v", m.ContentPackFor)
+	}
+}
+
+func TestParseDependencyDefaultsAndFloors(t *testing.T) {
+	data := `{"Name":"N","Version":"1.0.0","UniqueID":"A.B","EntryDll":"A.dll","Dependencies":[` +
+		`{"UniqueID":"A.B"},` +
+		`{"uniqueid":"C.D","minimumversion":"1.2.0","isrequired":false}` +
+		`]}`
+	m, v, errs := Parse([]byte(data))
+	if v != VerdictValid {
+		t.Fatalf("verdict = %q, want valid (errs=%v)", v, errs)
+	}
+	if len(m.Dependencies) != 2 {
+		t.Fatalf("deps = %+v", m.Dependencies)
+	}
+	if d := m.Dependencies[0]; d.UniqueID != "A.B" || !d.IsRequired || d.MinimumVersion != "" {
+		t.Fatalf("dep0 = %+v, want required with no floor", d)
+	}
+	if d := m.Dependencies[1]; d.UniqueID != "C.D" || d.IsRequired || d.MinimumVersion != "1.2.0" {
+		t.Fatalf("dep1 = %+v, want optional case-insensitive floor", d)
+	}
+}
+
+func TestParseUpdateKeySitesPreservedVerbatim(t *testing.T) {
+	data := `{"Name":"N","Version":"1.0.0","UniqueID":"A.B","EntryDll":"A.dll","UpdateKeys":[` +
+		`"UpdateManifest:https://example.org/mods.json@ExampleMod",` +
+		`"Nexus:2400@GeodeCrusher",` +
+		`"gitHub:Pathoschild/LookupAnything",` +
+		`"NotASite:whatever",` +
+		`"  "` +
+		`]}`
+	m, v, errs := Parse([]byte(data))
+	if v != VerdictValid {
+		t.Fatalf("verdict = %q, want valid (errs=%v)", v, errs)
+	}
+	want := []string{
+		"UpdateManifest:https://example.org/mods.json@ExampleMod",
+		"Nexus:2400@GeodeCrusher",
+		"gitHub:Pathoschild/LookupAnything",
+		"NotASite:whatever",
+	}
+	if len(m.UpdateKeys) != len(want) {
+		t.Fatalf("keys = %v, want %v", m.UpdateKeys, want)
+	}
+	for i := range want {
+		if m.UpdateKeys[i] != want[i] {
+			t.Fatalf("key %d = %q, want %q", i, m.UpdateKeys[i], want[i])
+		}
+	}
+}
+
+func TestParseVersionObjectForms(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		want    string
+		verdict Verdict
+	}{
+		{"numeric object", `{"MajorVersion":1,"MinorVersion":2,"PatchVersion":3}`, "1.2.3", VerdictValid},
+		{"patch omitted", `{"MajorVersion":1,"MinorVersion":2}`, "1.2.0", VerdictValid},
+		{"minor omitted", `{"MajorVersion":1}`, "1.0.0", VerdictValid},
+		{"major omitted", `{"MinorVersion":2}`, "0.2.0", VerdictValid},
+		{"case-insensitive keys", `{"majorversion":2,"minorversion":5}`, "2.5.0", VerdictValid},
+		{"prerelease tag", `{"MajorVersion":1,"MinorVersion":0,"PatchVersion":0,"PrereleaseTag":"beta.5"}`, "1.0.0-beta.5", VerdictValid},
+		{"string form", `"1.0.0-alpha"`, "1.0.0-alpha", VerdictValid},
+		{"non-numeric major", `{"MajorVersion":"x"}`, "", VerdictInvalid},
+		{"negative patch", `{"MajorVersion":1,"PatchVersion":-1}`, "", VerdictInvalid},
+		{"all components omitted", `{}`, "", VerdictInvalid},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			data := `{"Name":"N","Version":` + c.raw + `,"UniqueID":"A.B","EntryDll":"A.dll"}`
+			m, v, errs := Parse([]byte(data))
+			if v != c.verdict {
+				t.Fatalf("verdict = %q, want %q (errs=%v)", v, c.verdict, errs)
+			}
+			if v == VerdictValid && m.Version != c.want {
+				t.Fatalf("version = %q, want %q", m.Version, c.want)
+			}
+		})
+	}
+}
+
+func TestParseFieldNamesCaseInsensitiveAcrossSections(t *testing.T) {
+	code := `{"name":"N","version":"1.0.0","uniqueid":"A.B","entrydll":"A.dll",` +
+		`"updatekeys":["Nexus:1"],"dependencies":[{"UNIQUEID":"C.D","MINIMUMVERSION":"1.0"}]}`
+	m, v, errs := Parse([]byte(code))
+	if v != VerdictValid {
+		t.Fatalf("code mod verdict = %q, want valid (errs=%v)", v, errs)
+	}
+	if len(m.UpdateKeys) != 1 || len(m.Dependencies) != 1 || m.Dependencies[0].UniqueID != "C.D" || m.Dependencies[0].MinimumVersion != "1.0" {
+		t.Fatalf("case-variant sections lost: keys=%v deps=%+v", m.UpdateKeys, m.Dependencies)
+	}
+
+	pack := `{"NAME":"N","VERSION":"1.0.0","UNIQUEID":"A.B",` +
+		`"ContentPackFor":{"uniqueId":"H.H","minimumVersion":"2.0"}}`
+	m, v, errs = Parse([]byte(pack))
+	if v != VerdictValid {
+		t.Fatalf("pack verdict = %q, want valid (errs=%v)", v, errs)
+	}
+	if m.ContentPackFor == nil || m.ContentPackFor.UniqueID != "H.H" || m.ContentPackFor.MinimumVersion != "2.0" {
+		t.Fatalf("pack host = %+v", m.ContentPackFor)
+	}
+}
+
+func TestParseEntryDllSchemaPattern(t *testing.T) {
+	cases := []struct {
+		name     string
+		entry    string
+		verdict  Verdict
+		wantWarn bool
+	}{
+		{"schema-exact name", "LookupAnything.dll", VerdictValid, false},
+		{"space and brackets", "My Mod (1).dll", VerdictPartial, true},
+		{"case-variant extension loads but misses the schema", "LookupAnything.DLL", VerdictPartial, true},
+		{"path separator", "sub/dir.dll", VerdictInvalid, false},
+		{"no extension", "LookupAnything", VerdictPartial, true},
+		{"extension only", ".dll", VerdictPartial, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			data := `{"Name":"N","Version":"1.0.0","UniqueID":"A.B","EntryDll":"` + c.entry + `"}`
+			_, v, errs := Parse([]byte(data))
+			if v != c.verdict {
+				t.Fatalf("verdict = %q, want %q (errs=%v)", v, c.verdict, errs)
+			}
+			found := false
+			for _, e := range errs {
+				if e.Field == "EntryDll" && e.Stage == StageValidation &&
+					strings.Contains(e.Message, "schema pattern "+entryDllSchemaPattern) {
+					found = true
+				}
+			}
+			if found != c.wantWarn {
+				t.Fatalf("schema-pattern warning = %t, want %t (errs=%v)", found, c.wantWarn, errs)
+			}
+		})
+	}
+}
+
 func FuzzParse(f *testing.F) {
 	seeds := []string{
 		`{"Name":"N","Version":"1.0.0","UniqueID":"A.B","EntryDll":"A.dll"}`,

@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,7 +42,9 @@ const (
 	StageSyntax Stage = "syntax"
 	// StageInterpretation means a present value has the wrong shape.
 	StageInterpretation Stage = "interpretation"
-	// StageValidation means the interpreted values fail identity rules.
+	// StageValidation means the interpreted values fail identity rules, or
+	// deviate from the published manifest schema. Schema deviations are
+	// warnings: they degrade the verdict to partial without dropping the unit.
 	StageValidation Stage = "validation"
 )
 
@@ -314,6 +317,14 @@ func Parse(data []byte) (Manifest, Verdict, []FieldError) {
 		fail("manifest", "manifest has no EntryDll or ContentPackFor field; must specify one.")
 	case hasEntry && invalidFilename(m.EntryDll):
 		fail("EntryDll", fmt.Sprintf("manifest has invalid filename '%s' for the EntryDll field.", m.EntryDll))
+	case hasEntry && !schemaEntryDLL(m.EntryDll):
+		// Runtime-tolerated but schema-invalid (the published pattern is
+		// stricter than SMAPI's Path.GetInvalidFileNameChars rule): keep the
+		// unit, record the deviation.
+		warns = append(warns, FieldError{
+			Field: "EntryDll", Stage: StageValidation,
+			Message: fmt.Sprintf("manifest has EntryDll '%s', which doesn't match the manifest schema pattern %s (SMAPI still loads it).", m.EntryDll, entryDllSchemaPattern),
+		})
 	}
 
 	switch {
@@ -421,10 +432,13 @@ func interpretVersion(rm json.RawMessage) (val string, unresolved, missing bool,
 	for k, v := range obj {
 		lower[strings.ToLower(k)] = v
 	}
-	num := func(name string, required bool) (int, bool) {
+	// SMAPI's SemanticVersionConverter reads each component with
+	// ValueIgnoreCase<int>, which yields 0 for an absent key (and throws for a
+	// present-but-unconvertible one), so an omitted component defaults to 0.
+	num := func(name string) (int, bool) {
 		v, ok := lower[name]
 		if !ok {
-			return 0, !required
+			return 0, true
 		}
 		var n float64
 		if err := json.Unmarshal(v, &n); err != nil || n != float64(int(n)) || n < 0 {
@@ -440,15 +454,15 @@ func interpretVersion(rm json.RawMessage) (val string, unresolved, missing bool,
 		}
 		return int(n), true
 	}
-	major, ok := num("majorversion", true)
+	major, ok := num("majorversion")
 	if !ok {
 		return "", false, false, "invalid version object: MajorVersion must be a non-negative integer"
 	}
-	minor, ok := num("minorversion", true)
+	minor, ok := num("minorversion")
 	if !ok {
 		return "", false, false, "invalid version object: MinorVersion must be a non-negative integer"
 	}
-	patch, ok := num("patchversion", false)
+	patch, ok := num("patchversion")
 	if !ok {
 		return "", false, false, "invalid version object: PatchVersion must be a non-negative integer"
 	}
@@ -493,6 +507,21 @@ func validVersionString(s string) bool {
 		}
 	}
 	return true
+}
+
+// entryDllSchemaPattern is the published manifest schema's EntryDll pattern.
+// It is frozen to the schema, ASCII-only and case-sensitive, and is stricter
+// than the runtime filename rule SMAPI actually enforces.
+const entryDllSchemaPattern = `^[a-zA-Z0-9_.-]+\.dll$`
+
+// entryDllSchemaPatternRE is entryDllSchemaPattern compiled once.
+var entryDllSchemaPatternRE = regexp.MustCompile(entryDllSchemaPattern)
+
+// schemaEntryDLL reports whether name matches entryDllSchemaPattern. The
+// verdict comes from invalidFilename (SMAPI's runtime rule); this predicate
+// only decides whether the schema deviation is worth a warning.
+func schemaEntryDLL(name string) bool {
+	return entryDllSchemaPatternRE.MatchString(name)
 }
 
 // invalidFilename reports whether name carries path or control characters,
