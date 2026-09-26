@@ -68,6 +68,12 @@ wiki and docs tell authors to use) writes the release zip in
   bundled content packs "will be grouped with the main mod into a parent folder
   automatically" (`docs/technical/mod-package.md`, sections *Release zip* and
   *Bundled content packs*).
+- Naming note for anyone grepping for it: there is no `ModZipWriter` type in
+  SMAPI's tree any more. The zip-writing code is the build task
+  (`DeployModTask.CreateReleaseZip`) plus the file managers
+  (`MainModFileManager`, `ContentPackFileManager`, `IModFileManager`,
+  `BundleFile`); the mod build package's repo was merged into
+  `Pathoschild/SMAPI` under `src/SMAPI.ModBuildConfig/`.
 
 **A real multi-unit project:** Stardew Valley Expanded's project file declares
 two content packs alongside the main mod
