@@ -17,11 +17,14 @@
 //     exception dump;
 //   - loose root files, an unreadable folder or manifest, and the SMAPI
 //     installer are reported as records with their own reasons, where SMAPI
-//     logs prose, throws, or reuses ManifestMissing respectively.
+//     logs prose, throws, or reuses ManifestMissing respectively;
+//   - the XNB note appends Astradew's never-deploy guidance to SMAPI's own
+//     sentence, because the product diagnoses legacy XNB content and never
+//     installs it.
 //
 // Parity is deliberate elsewhere: directory links are followed like real
 // folders (SMAPI gets that from DirectoryInfo; a plain fs.FS needs the Stat in
-// isDir), and every note string is SMAPI's own wording.
+// isDir), and every other note string is SMAPI's own wording.
 package manifest
 
 import (
@@ -30,6 +33,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/Zendevve/astradew/internal/detect"
 )
 
 // Outcome is the scanner's classification of one folder, mirroring SMAPI's
@@ -80,10 +85,12 @@ const (
 )
 
 // SMAPI's wording for the two outcomes that can be reported either directly or
-// by consolidation; kept in one place so parity text can't drift apart.
+// by consolidation, kept in one place so parity text can't drift apart. The
+// XNB note carries the product's never-deploy guidance after SMAPI's sentence:
+// a legacy XNB folder is diagnosed, never installed.
 const (
 	noteEmptyFolder = "it's an empty folder."
-	noteXnbMod      = "it's not a SMAPI mod (see https://smapi.io/xnb for info)."
+	noteXnbMod      = "it's not a SMAPI mod (see https://smapi.io/xnb for info). Astradew does not install XNB mods automatically."
 )
 
 // Unit is one parsed Mod Unit: how its Manifest parsed, with per-field detail.
@@ -91,6 +98,12 @@ type Unit struct {
 	Manifest Manifest
 	Verdict  Verdict
 	Errors   []FieldError
+	// SystemMod reports whether the Manifest's Unique ID names one of SMAPI's
+	// bundled Mod Units (Console Commands, Save Backup), compared
+	// case-insensitively against the Phase 1 allow-list. Folder names never
+	// confer system status: a renamed bundle still matches, a forged folder
+	// name stays an ordinary third-party unit.
+	SystemMod bool
 }
 
 // Record is one folder the scan reports. A flat list of these is the whole
@@ -103,7 +116,9 @@ type Record struct {
 	Outcome Outcome
 	// Reason is why, for every outcome except a parsed unit.
 	Reason Reason
-	// Note is the human-facing explanation, mirroring SMAPI's wording.
+	// Note is the human-facing explanation: SMAPI's wording where the outcome
+	// mirrors SMAPI's, plus Astradew's guidance for the cases SMAPI only logs,
+	// throws on, or leaves to the product.
 	Note string
 	// Files lists the offending file names, set only on a loose-root-files
 	// record, sorted case-insensitively.
@@ -120,6 +135,12 @@ type Options struct {
 	// a mis-cased manifest.json still identifies a Mod Unit. SMAPI defaults it
 	// on for Linux and Android and off elsewhere; the zero value is off.
 	CaseInsensitivePaths bool
+	// Cache, when set, serves parsed manifests whose file stat is unchanged,
+	// so rescanning an untouched Mods root re-reads nothing. The zero value
+	// scans without caching, reading and parsing every manifest every time.
+	// Construct one with NewCache: a zero Cache must not be used. The cache
+	// lives exactly as long as the caller keeps it and never persists.
+	Cache *Cache
 }
 
 // LinkResolver is implemented by filesystem bridges that can name a folder's
@@ -267,10 +288,10 @@ func (s *scanner) scanFolder(folder string) []Record {
 // readFolder classifies one mod candidate: manifest first, then SMAPI's
 // manifest-less taxonomy in its exact precedence.
 func (s *scanner) readFolder(folder string, entries []fs.DirEntry) Record {
-	data, err := s.readManifest(folder, entries)
+	unit, err := s.readUnit(folder, entries)
 	switch {
 	case err == nil:
-		return classify(folder, data)
+		return recordForUnit(folder, unit)
 	case !errors.Is(err, fs.ErrNotExist):
 		return Record{
 			Path: folder, Outcome: OutcomeInvalid, Reason: ReasonUnreadable,
@@ -315,37 +336,73 @@ func (s *scanner) readFolder(folder string, entries []fs.DirEntry) Record {
 	}
 }
 
-// readManifest reads the folder's own manifest.json, top level only. The
+// manifestPath names the folder's own manifest.json, top level only. The
 // conventional name wins when several spellings exist; the case-insensitive
 // fallback follows the option, and picks the first match in sorted order
 // (SMAPI's own pick is enumeration-order dependent, so it is unspecified).
-func (s *scanner) readManifest(folder string, entries []fs.DirEntry) ([]byte, error) {
+// Resolving the name through Stat rather than a read is what lets a cache hit
+// skip the read: the scanner has to know which file it is about to consult
+// before it can ask whether that file's stat was already parsed.
+func (s *scanner) manifestPath(folder string, entries []fs.DirEntry) (string, error) {
 	const conventional = "manifest.json"
-	data, err := fs.ReadFile(s.fsys, path.Join(folder, conventional))
-	if err == nil || !errors.Is(err, fs.ErrNotExist) || !s.opts.CaseInsensitivePaths {
-		return data, err
+	name := path.Join(folder, conventional)
+	_, err := fs.Stat(s.fsys, name)
+	switch {
+	case err == nil:
+		return name, nil
+	case !errors.Is(err, fs.ErrNotExist):
+		return "", err
+	}
+	if !s.opts.CaseInsensitivePaths {
+		return "", fs.ErrNotExist
 	}
 	for _, entry := range entries {
 		if !s.isDir(entry, folder) && strings.EqualFold(entry.Name(), conventional) {
-			return fs.ReadFile(s.fsys, path.Join(folder, entry.Name()))
+			return path.Join(folder, entry.Name()), nil
 		}
 	}
-	return nil, fs.ErrNotExist
+	return "", fs.ErrNotExist
 }
 
-// classify turns manifest bytes into a unit record. A manifest that fails
-// validation still reports its parsed detail alongside the failure.
-func classify(folder string, data []byte) Record {
+// readUnit resolves the folder's manifest and parses it, serving the cached
+// parse when a Cache is configured and the manifest file's stat is unchanged.
+// The error is the manifest's own, exactly as it was before caching existed: a
+// folder with no manifest reports fs.ErrNotExist, and one whose manifest can't
+// be read reports why.
+func (s *scanner) readUnit(folder string, entries []fs.DirEntry) (*Unit, error) {
+	name, err := s.manifestPath(folder, entries)
+	if err != nil {
+		return nil, err
+	}
+	if s.opts.Cache != nil {
+		return s.opts.Cache.unit(s.fsys, name)
+	}
+	data, err := fs.ReadFile(s.fsys, name)
+	if err != nil {
+		return nil, err
+	}
+	return parseUnit(data), nil
+}
+
+// parseUnit parses one manifest and marks system status. Marking happens here,
+// where the manifest is parsed, so a unit served from the cache carries the
+// same marking as one parsed fresh.
+func parseUnit(data []byte) *Unit {
 	m, verdict, errs := Parse(data)
-	unit := &Unit{Manifest: m, Verdict: verdict, Errors: errs}
-	if verdict == VerdictInvalid {
+	return &Unit{Manifest: m, Verdict: verdict, Errors: errs, SystemMod: detect.IsBundledUniqueID(m.UniqueID)}
+}
+
+// recordForUnit turns one parsed Unit into its folder's record. A manifest that
+// fails validation still reports its parsed detail alongside the failure.
+func recordForUnit(folder string, unit *Unit) Record {
+	if unit.Verdict == VerdictInvalid {
 		// Parse appends failures after warnings and never returns an invalid
 		// verdict without one, so the last error names the failure rather than
 		// a warning that merely accompanied it. The guard is defensive: a
 		// future parser change must not panic a scan over hostile input.
 		note := "its manifest is invalid."
-		if n := len(errs); n > 0 {
-			note = "parsing its manifest failed: " + errs[n-1].Message
+		if n := len(unit.Errors); n > 0 {
+			note = "parsing its manifest failed: " + unit.Errors[n-1].Message
 		}
 		return Record{
 			Path: folder, Outcome: OutcomeInvalid, Reason: ReasonManifestInvalid,
@@ -353,7 +410,7 @@ func classify(folder string, data []byte) Record {
 		}
 	}
 	outcome := OutcomeSmapi
-	if m.ContentPackFor != nil {
+	if unit.Manifest.ContentPackFor != nil {
 		outcome = OutcomeContentPack
 	}
 	return Record{Path: folder, Outcome: outcome, Unit: unit}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io/fs"
 	"sort"
+	"strings"
 
 	"github.com/Zendevve/astradew/internal/apperror"
 )
@@ -114,11 +115,25 @@ func isInstallerBundle(gameDir fs.FS) bool {
 	return err == nil && dat
 }
 
-// bundledModIDs is the installer allow-list (BundledModIds): the reliable
-// SMAPI-supplied test is manifest identity, not folder name.
-var bundledModIDs = map[string]bool{
+// bundledUniqueIDs is the installer allow-list (SMAPI's BundledModIds): the
+// reliable SMAPI-supplied test is manifest identity, not folder name. The
+// product glossary calls the identifier a Unique ID.
+var bundledUniqueIDs = map[string]bool{
 	"SMAPI.ConsoleCommands": true,
 	"SMAPI.SaveBackup":      true,
+}
+
+// IsBundledUniqueID reports whether uid names one of SMAPI's bundled Mod Units
+// (Console Commands, Save Backup). The comparison is case-insensitive, as
+// SMAPI's own Unique ID matching is, and folder names are never consulted.
+// The Phase 2 scanner reuses this to mark System Mods.
+func IsBundledUniqueID(uid string) bool {
+	for id := range bundledUniqueIDs {
+		if strings.EqualFold(id, uid) {
+			return true
+		}
+	}
+	return false
 }
 
 // bundledModPresent reports whether Mods/<dir>/manifest.json exists and its
@@ -135,7 +150,7 @@ func bundledModPresent(gameDir fs.FS, dir string) bool {
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		return false
 	}
-	return bundledModIDs[manifest.UniqueID]
+	return bundledUniqueIDs[manifest.UniqueID]
 }
 
 // Detect evaluates one candidate game directory. Read-only: Open/Stat/

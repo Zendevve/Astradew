@@ -146,7 +146,7 @@ func bundledManifestVersions(gameDir fs.FS) []manifestVersion {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			continue
 		}
-		if !bundledModIDs[m.UniqueID] || strings.TrimSpace(m.Version) == "" {
+		if !bundledUniqueIDs[m.UniqueID] || strings.TrimSpace(m.Version) == "" {
 			continue
 		}
 		out = append(out, manifestVersion{
@@ -159,13 +159,14 @@ func bundledManifestVersions(gameDir fs.FS) []manifestVersion {
 	return out
 }
 
-// versionIdentity normalises a version string for source comparison only:
+// VersionIdentity normalises a version string for source comparison only:
 // build metadata ("+...") never distinguishes an install, trailing zero
 // components are padding ("4.5.2" == "4.5.2.0"), and surrounding space is
 // ignored. Prerelease suffixes ("-alpha.<date>") are identity: a dev build
 // beside a release manifest is a real disagreement. Display keeps the
-// original string; only Conflict checks use the identity.
-func versionIdentity(v string) string {
+// original string; only identity checks use this. It is exported because the
+// manifest scanner's version comparison reuses these frozen Phase 1 rules.
+func VersionIdentity(v string) string {
 	trimmed := strings.TrimSpace(v)
 	if i := strings.Index(trimmed, "+"); i >= 0 {
 		trimmed = trimmed[:i]
@@ -183,14 +184,14 @@ func versionIdentity(v string) string {
 }
 
 // sameVersion reports whether two version strings name the same release
-// under versionIdentity: metadata and zero padding ignored, prerelease kept.
+// under VersionIdentity: metadata and zero padding ignored, prerelease kept.
 func sameVersion(a, b string) bool {
-	return versionIdentity(a) == versionIdentity(b)
+	return VersionIdentity(a) == VersionIdentity(b)
 }
 
 // detectSmapiVersions resolves the on-disk SMAPI version; LastRun stays ""
 // here (ApplyLogHeader owns the log fallback). Precedence is assembly, then
-// the UniqueID-gated bundled manifests. Sources compare by versionIdentity
+// the UniqueID-gated bundled manifests. Sources compare by VersionIdentity
 // (build metadata and zero padding ignored, prerelease kept) while display
 // keeps the original strings. Any real disagreement — manifests among
 // themselves, a manifest Version against its own MinimumApiVersion, or

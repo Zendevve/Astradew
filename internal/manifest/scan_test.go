@@ -326,6 +326,49 @@ func TestScanVortexEmptyFolder(t *testing.T) {
 	}
 }
 
+func TestScanMarksSystemModsByUniqueID(t *testing.T) {
+	records := Scan(fstest.MapFS{
+		"Renamed Bundle/manifest.json":  {Data: []byte(codeMod("smapi.consolecommands"))},
+		"SaveBackup/manifest.json":      {Data: []byte(codeMod("SMAPI.SaveBackup"))},
+		"ConsoleCommands/manifest.json": {Data: []byte(codeMod("ThirdParty.Fake"))},
+		"Ordinary/manifest.json":        {Data: []byte(codeMod("ThirdParty.Ordinary"))},
+		"Legacy/thing.xnb":              {Data: []byte("xnb")},
+	}, Options{})
+
+	got := byPath(records)
+	for _, p := range []string{"Renamed Bundle", "SaveBackup"} {
+		r := got[p]
+		if r.Unit == nil || !r.Unit.SystemMod {
+			t.Fatalf("%s = %+v, want a marked System Mod", p, r)
+		}
+	}
+	for _, p := range []string{"ConsoleCommands", "Ordinary"} {
+		r := got[p]
+		if r.Unit == nil {
+			t.Fatalf("%s carries no unit: %+v", p, r)
+		}
+		if r.Unit.SystemMod {
+			t.Fatalf("%s = %+v, want an ordinary third-party unit (folder names never confer system status)", p, r)
+		}
+	}
+	if r := got["Legacy"]; r.Unit != nil {
+		t.Fatalf("legacy = %+v, want no unit detail to mark", r)
+	}
+}
+
+func TestScanXnbNoteCarriesNeverDeployGuidance(t *testing.T) {
+	records := Scan(fstest.MapFS{
+		"Legacy/thing.xnb": {Data: []byte("xnb")},
+	}, Options{})
+
+	if len(records) != 1 {
+		t.Fatalf("records = %v, want one", scanPaths(records))
+	}
+	if !strings.Contains(records[0].Note, "Astradew does not install XNB mods automatically.") {
+		t.Fatalf("note = %q, want the never-deploy guidance", records[0].Note)
+	}
+}
+
 func TestScanManifestVerdicts(t *testing.T) {
 	records := Scan(fstest.MapFS{
 		"Partial/manifest.json": {Data: []byte(`{"Name":"P","Version":"1.0.0","UniqueID":"A.P","EntryDll":"P.dll","UpdateKeys":"oops"}`)},
@@ -394,6 +437,21 @@ func TestScanUnreadableFolderIsReportedNotFatal(t *testing.T) {
 	}
 	if r, ok := got["Good"]; !ok || r.Outcome != OutcomeSmapi {
 		t.Fatalf("one bad folder spoiled the scan: %v", scanPaths(records))
+	}
+}
+
+func TestScanUnreadableManifestIsReportedNotFatal(t *testing.T) {
+	files := unreadableManifestFS{MapFS: fstest.MapFS{
+		"Locked/manifest.json": {Data: []byte(codeMod("Locked.Mod"))},
+		"Good/manifest.json":   {Data: []byte(codeMod("Good.Mod"))},
+	}}
+	records := Scan(files, Options{})
+	got := byPath(records)
+	if r := got["Locked"]; r.Outcome != OutcomeInvalid || r.Reason != ReasonUnreadable {
+		t.Fatalf("locked = %+v, want invalid/unreadable", r)
+	}
+	if r, ok := got["Good"]; !ok || r.Outcome != OutcomeSmapi {
+		t.Fatalf("one bad manifest spoiled the scan: %v", scanPaths(records))
 	}
 }
 
@@ -524,6 +582,17 @@ func (u unreadableFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		return nil, fs.ErrPermission
 	}
 	return fs.ReadDir(u.MapFS, name)
+}
+
+// unreadableManifestFS models a folder whose listing works but whose
+// manifest.json cannot be read (permissions, corrupt I/O).
+type unreadableManifestFS struct{ fstest.MapFS }
+
+func (u unreadableManifestFS) ReadFile(name string) ([]byte, error) {
+	if name == "Locked/manifest.json" {
+		return nil, fs.ErrPermission
+	}
+	return fs.ReadFile(u.MapFS, name)
 }
 
 // loopFS models directory links: links maps an alias path onto its target, and
