@@ -456,12 +456,12 @@ func TestScanUnreadableManifestIsReportedNotFatal(t *testing.T) {
 }
 
 func TestScanLinkLoopReportedIgnored(t *testing.T) {
-	files := loopFS{
+	files := loopFS{aliasFS{
 		MapFS: fstest.MapFS{
 			"Group/Live/manifest.json": {Data: []byte(codeMod("Live.Mod"))},
 		},
 		links: map[string]string{"Group/loop": "Group"},
-	}
+	}}
 	records := Scan(files, Options{})
 	if len(records) != 2 {
 		t.Fatalf("records = %v, want the unit plus one loop report", scanPaths(records))
@@ -480,13 +480,13 @@ func TestScanLinkLoopReportedIgnored(t *testing.T) {
 }
 
 func TestScanLinkLoopInsideLeafFileWalkTerminates(t *testing.T) {
-	files := loopFS{
+	files := loopFS{aliasFS{
 		MapFS: fstest.MapFS{
 			"Leaf/notes.json":     {Data: []byte("{}")},
 			"Leaf/sub/other.json": {Data: []byte("{}")},
 		},
 		links: map[string]string{"Leaf/sub/loop": "Leaf"},
-	}
+	}}
 	records := Scan(files, Options{})
 	if len(records) != 1 {
 		t.Fatalf("records = %v, want one record", scanPaths(records))
@@ -595,37 +595,63 @@ func (u unreadableManifestFS) ReadFile(name string) ([]byte, error) {
 	return fs.ReadFile(u.MapFS, name)
 }
 
-// loopFS models directory links: links maps an alias path onto its target, and
-// Canonical reports the target, which a plain fs.FS cannot express.
-type loopFS struct {
+// aliasFS models directory links over an in-memory tree: links maps a literal
+// path onto the path it points at. Resolution runs to a fixed point the way a
+// real filesystem follows a chain of links, and ReadDir injects each link as an
+// entry inside the folder it physically sits in, so a scan that descends
+// through one sees the target's listing at the new path, links included.
+type aliasFS struct {
 	fstest.MapFS
 	links map[string]string
 }
 
-func (l loopFS) resolve(name string) string {
-	for alias, target := range l.links {
-		if name == alias {
-			return target
+// resolve follows link aliases to a fixed point, longest prefix first so a
+// nested alias can never shadow a longer one, with a hop cap so the double
+// cannot loop inside itself.
+func (a aliasFS) resolve(name string) string {
+	const maxHops = 40
+	for range maxHops {
+		next, ok := a.hop(name)
+		if !ok {
+			return name
 		}
-		if strings.HasPrefix(name, alias+"/") {
-			return path.Join(target, strings.TrimPrefix(name, alias+"/"))
-		}
+		name = next
 	}
 	return name
 }
 
-func (l loopFS) Open(name string) (fs.File, error) { return l.MapFS.Open(l.resolve(name)) }
+// hop replaces one alias prefix, reporting false when none applies.
+func (a aliasFS) hop(name string) (string, bool) {
+	best := ""
+	for alias := range a.links {
+		if name != alias && !strings.HasPrefix(name, alias+"/") {
+			continue
+		}
+		if len(alias) > len(best) {
+			best = alias
+		}
+	}
+	if best == "" {
+		return name, false
+	}
+	return path.Join(a.links[best], strings.TrimPrefix(name, best)), true
+}
 
-// ReadDir lists the resolved folder plus one synthetic entry per link alias
-// that sits inside it, so traversal sees the link the way a real filesystem
-// would. Entries stay name-sorted, matching fs.ReadDir otherwise.
-func (l loopFS) ReadDir(name string) ([]fs.DirEntry, error) {
-	entries, err := fs.ReadDir(l.MapFS, l.resolve(name))
+func (a aliasFS) Open(name string) (fs.File, error) { return a.MapFS.Open(a.resolve(name)) }
+
+func (a aliasFS) ReadFile(name string) ([]byte, error) { return fs.ReadFile(a.MapFS, a.resolve(name)) }
+
+// ReadDir lists the resolved folder plus one synthetic entry per link that sits
+// inside it, so traversal sees a link the way a real filesystem presents it.
+// Entries stay name-sorted, matching fs.ReadDir otherwise.
+func (a aliasFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	resolved := a.resolve(name)
+	entries, err := fs.ReadDir(a.MapFS, resolved)
 	if err != nil {
 		return nil, err
 	}
-	for alias := range l.links {
-		if path.Dir(alias) == name {
+	for alias := range a.links {
+		if path.Dir(alias) == resolved {
 			entries = append(entries, linkEntry{path.Base(alias)})
 		}
 	}
@@ -633,12 +659,20 @@ func (l loopFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
-func (l loopFS) ReadFile(name string) ([]byte, error)  { return fs.ReadFile(l.MapFS, l.resolve(name)) }
-func (l loopFS) Canonical(name string) (string, error) { return l.resolve(name), nil }
-
 // Stat resolves aliases the way a real filesystem follows a link, which is how
 // the scanner learns that a link entry is really a folder.
-func (l loopFS) Stat(name string) (fs.FileInfo, error) { return fs.Stat(l.MapFS, l.resolve(name)) }
+func (a aliasFS) Stat(name string) (fs.FileInfo, error) { return fs.Stat(a.MapFS, a.resolve(name)) }
+
+// loopFS adds the canonical identity only a real bridge can name: what
+// LinkResolver lets the visited-set guard see through.
+type loopFS struct{ aliasFS }
+
+func (l loopFS) Canonical(name string) (string, error) { return l.resolve(name), nil }
+
+// uncanonicalFS follows links but cannot name their canonical identity — the
+// shape a plain fs.FS presents (os.DirFS), where the visited-set guard falls
+// back to literal paths and only the scan's folder budget bounds the walk.
+type uncanonicalFS struct{ aliasFS }
 
 // linkEntry is the directory entry a link presents on a real filesystem: a
 // link, not a folder, even when its target is one.

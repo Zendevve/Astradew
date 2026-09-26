@@ -13,13 +13,15 @@ import (
 	"time"
 )
 
-// probeFS wraps a filesystem and records the names passed to ReadFile, so a
-// cache hit is observable as a manifest the scan never re-read. ReadFile can
-// also be made to fail per name, which models a transient read failure.
+// probeFS wraps a filesystem and records the names passed to ReadFile and
+// ReadDir, so a cache hit or a work bound is observable as a file the scan never
+// re-read or a listing it never took. ReadFile can also be made to fail per
+// name, which models a transient read failure.
 type probeFS struct {
 	fsys     fs.FS
 	mu       sync.Mutex
 	reads    []string
+	dirs     []string
 	failRead map[string]bool
 }
 
@@ -43,7 +45,12 @@ func (p *probeFS) repair(name string) {
 
 func (p *probeFS) Open(name string) (fs.File, error) { return p.fsys.Open(name) }
 
-func (p *probeFS) ReadDir(name string) ([]fs.DirEntry, error) { return fs.ReadDir(p.fsys, name) }
+func (p *probeFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	p.mu.Lock()
+	p.dirs = append(p.dirs, name)
+	p.mu.Unlock()
+	return fs.ReadDir(p.fsys, name)
+}
 
 func (p *probeFS) Stat(name string) (fs.FileInfo, error) { return fs.Stat(p.fsys, name) }
 
@@ -76,6 +83,19 @@ func (p *probeFS) readNames() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.reads...)
+}
+
+// countDirs reports how many times a folder listing named name was read.
+func (p *probeFS) countDirs(name string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, dir := range p.dirs {
+		if dir == name {
+			n++
+		}
+	}
+	return n
 }
 
 // hashOf is the SHA-256 oracle for one body, in the hex form Hash returns.

@@ -20,7 +20,14 @@
 //     logs prose, throws, or reuses ManifestMissing respectively;
 //   - the XNB note appends Astradew's never-deploy guidance to SMAPI's own
 //     sentence, because the product diagnoses legacy XNB content and never
-//     installs it.
+//     installs it;
+//   - a per-scan work bound (defaultScanLimit listings read, defaultEntryLimit
+//     entries examined, maxScanDepth components deep) that ends the scan once a
+//     bound is spent, reported as one ignored/scan-limit record at the folder it
+//     ended on. SMAPI's recursion has no bound at all, and a link loop a plain
+//     fs.FS cannot see through would never end; a bound that counted only
+//     listings would let one wide folder of links multiply the records it
+//     produces by the number of passes.
 //
 // Parity is deliberate elsewhere: directory links are followed like real
 // folders (SMAPI gets that from DirectoryInfo; a plain fs.FS needs the Stat in
@@ -82,6 +89,9 @@ const (
 	ReasonLooseRootFiles Reason = "loose-root-files"
 	// ReasonUnreadable means the filesystem refused to read the folder.
 	ReasonUnreadable Reason = "unreadable"
+	// ReasonScanLimit means the scan's folder budget ran out before this folder
+	// was read, so its contents are unknown rather than empty.
+	ReasonScanLimit Reason = "scan-limit"
 )
 
 // SMAPI's wording for the two outcomes that can be reported either directly or
@@ -92,6 +102,30 @@ const (
 	noteEmptyFolder = "it's an empty folder."
 	noteXnbMod      = "it's not a SMAPI mod (see https://smapi.io/xnb for info). Astradew does not install XNB mods automatically."
 )
+
+// The scan's three work bounds. Together they bound what one scan can cost: no
+// record or visited key can exceed the entries examined, no listing can be read
+// without an entry having paid for it, and no path can grow past maxScanDepth.
+// A tree a plain fs.FS cannot see through — no LinkResolver means the visited
+// set has no canonical identity to match, so a link loop never repeats a key —
+// therefore ends at a bound with one ignored/scan-limit record instead of an
+// endless walk.
+//
+// One floor stays and is deliberate: fs.ReadDir hands back a whole listing at
+// once, so the widest single directory a tree holds is memory no charge can
+// refuse. The numbers are sized so no real Mods tree approaches them — a
+// two-thousand-mod tree reads a couple of thousand listings and examines tens
+// of thousands of entries — while a hostile one stops in bounded time.
+const (
+	defaultScanLimit  = 10_000
+	defaultEntryLimit = 100_000
+	maxScanDepth      = 64
+)
+
+// noteScanLimit is the record note for a folder a bound left unread or
+// unexpanded. No number appears in the sentence, so retuning the constants
+// cannot stale it.
+const noteScanLimit = "not scanned: this scan reached its limit (a link loop can do this)."
 
 // Unit is one parsed Mod Unit: how its Manifest parsed, with per-field detail.
 type Unit struct {
@@ -141,6 +175,11 @@ type Options struct {
 	// Construct one with NewCache: a zero Cache must not be used. The cache
 	// lives exactly as long as the caller keeps it and never persists.
 	Cache *Cache
+	// scanLimit and entryLimit override the scan's work bounds (<= 0 means the
+	// default). They are unexported on purpose: they exist so tests can exercise
+	// the bounds on a handful of folders and entries, not as product knobs.
+	scanLimit  int
+	entryLimit int
 }
 
 // LinkResolver is implemented by filesystem bridges that can name a folder's
@@ -157,8 +196,22 @@ type LinkResolver interface {
 // rooted at the Mods folder itself (the game's Mods folder or an alternate
 // mods-path root); a missing or unreadable root is an honest empty scan, never
 // an error, and no single bad folder fails the whole scan.
+//
+// One scan reads at most defaultScanLimit folder listings, examines at most
+// defaultEntryLimit directory entries, and refuses folders deeper than
+// maxScanDepth; the first bound it spends ends the scan, which reports one
+// ignored scan-limit record naming the folder it ended on. No tree — a link loop
+// included — can therefore run it without bound. A bridge that wants accurate
+// loop reporting implements LinkResolver; without one these bounds are the only
+// protection, because literal paths cannot see through a link.
 func Scan(fsys fs.FS, opts Options) []Record {
-	s := &scanner{fsys: fsys, opts: opts, visited: map[string]bool{}}
+	s := &scanner{fsys: fsys, opts: opts, visited: map[string]bool{}, budget: opts.scanLimit, entries: opts.entryLimit}
+	if s.budget <= 0 {
+		s.budget = defaultScanLimit
+	}
+	if s.entries <= 0 {
+		s.entries = defaultEntryLimit
+	}
 	s.resolver, _ = fsys.(LinkResolver)
 
 	entries, err := fs.ReadDir(fsys, ".")
@@ -167,11 +220,17 @@ func Scan(fsys fs.FS, opts Options) []Record {
 	}
 	s.visited[s.canonical(".")] = true
 
-	out := make([]Record, 0, len(entries))
+	out := make([]Record, 0, min(len(entries), s.entries+1))
 	if loose := s.looseRootRecord(entries); loose != nil {
 		out = append(out, *loose)
 	}
 	for _, entry := range entries {
+		if s.done {
+			break
+		}
+		if !s.examine() {
+			return append(out, scanLimitRecord(""))
+		}
 		// The root always descends: it is never a mod folder of its own.
 		if !s.isDir(entry, ".") || !relevantName(entry.Name()) {
 			continue
@@ -186,6 +245,9 @@ type scanner struct {
 	opts     Options
 	visited  map[string]bool
 	resolver LinkResolver
+	budget   int  // folder listings this scan may still read; see spend
+	entries  int  // directory entries this scan may still examine; see examine
+	done     bool // a bound ended the scan: enclosing loops break instead of reporting more
 }
 
 // canonical names a folder's identity: what the bridge resolves, else the
@@ -209,6 +271,50 @@ func (s *scanner) enter(name string) bool {
 	}
 	s.visited[canonical] = true
 	return true
+}
+
+// spend draws one folder listing from the scan's budget, reporting false when
+// it is spent. The Mods root listing is never charged: the budget bounds what a
+// scan expands below the root, and every scan needs that one listing to start
+// from. The first false ends the scan (see done), so the caller that saw it
+// reports where the scan stopped and nothing after it is examined.
+func (s *scanner) spend() bool {
+	if s.budget <= 0 {
+		s.done = true
+		return false
+	}
+	s.budget--
+	return true
+}
+
+// examine draws one directory entry from the scan's entry budget, reporting
+// false when it is spent. Charging per entry, not just per listing, is what
+// keeps one wide folder of links from multiplying the scan's records and
+// visited keys by the number of passes over it: the entry is the unit of work
+// each listing hands out.
+func (s *scanner) examine() bool {
+	if s.entries <= 0 {
+		s.done = true
+		return false
+	}
+	s.entries--
+	return true
+}
+
+// tooDeep reports whether folder sits maxScanDepth or more path components below
+// the root. No SMAPI-visible tree comes close, and the cap keeps the path
+// strings the visited set and every record retain linear in the bounds instead
+// of quadratic. A folder it refuses ends the scan like a spent bound does, so
+// the report still carries exactly one record saying where scanning stopped.
+func tooDeep(folder string) bool {
+	return strings.Count(folder, "/") >= maxScanDepth
+}
+
+// halt ends the scan without charging a bound: the depth cap refuses a folder
+// outright, and the refusal has to end the scan the way a spent bound does, or
+// every deep branch would add its own record claiming to be the stop.
+func (s *scanner) halt() {
+	s.done = true
 }
 
 // isDir reports whether an entry is a folder for traversal purposes: a real
@@ -242,6 +348,13 @@ func (s *scanner) scanFolder(folder string) []Record {
 	if !relevantName(name) {
 		return nil
 	}
+	if tooDeep(folder) {
+		s.halt()
+		return []Record{scanLimitRecord(folder)}
+	}
+	if !s.spend() {
+		return []Record{scanLimitRecord(folder)}
+	}
 	if !s.enter(folder) {
 		return []Record{{
 			Path: folder, Outcome: OutcomeIgnored, Reason: ReasonLinkLoop,
@@ -258,6 +371,9 @@ func (s *scanner) scanFolder(folder string) []Record {
 
 	subfolders, files := 0, 0
 	for _, entry := range entries {
+		if !s.examine() {
+			return []Record{scanLimitRecord(folder)}
+		}
 		if s.isDir(entry, folder) {
 			// A dot folder still counts here: SMAPI's name filter doesn't
 			// test the dot prefix, the traversal does.
@@ -275,6 +391,9 @@ func (s *scanner) scanFolder(folder string) []Record {
 	if subfolders > 0 && files == 0 {
 		var children []Record
 		for _, entry := range entries {
+			if s.done {
+				break
+			}
 			if !s.isDir(entry, folder) || !relevantName(entry.Name()) {
 				continue
 			}
@@ -299,7 +418,10 @@ func (s *scanner) readFolder(folder string, entries []fs.DirEntry) Record {
 		}
 	}
 
-	files := s.collectFiles(folder)
+	files, complete := s.collectFiles(folder)
+	if !complete {
+		return scanLimitRecord(folder)
+	}
 	if vortexEmpty(files) {
 		return Record{
 			Path: folder, Outcome: OutcomeInvalid, Reason: ReasonEmptyVortexFolder,
@@ -416,9 +538,19 @@ func recordForUnit(folder string, unit *Unit) Record {
 	return Record{Path: folder, Outcome: outcome, Unit: unit}
 }
 
+// scanLimitRecord reports a folder a work bound left unread or unexpanded. Such
+// a folder is unknown, not empty: nothing about it may be inferred from a
+// listing the scan never finished, and its record is the one signal that the
+// scan stopped here.
+func scanLimitRecord(folder string) Record {
+	return Record{Path: folder, Outcome: OutcomeIgnored, Reason: ReasonScanLimit, Note: noteScanLimit}
+}
+
 // consolidate merges a non-root organizer's child records exactly as SMAPI
 // does: only more than one child merges, all-empty becomes one empty record on
-// the parent, and all-XNB-or-empty becomes one XNB record on the parent.
+// the parent, and all-XNB-or-empty becomes one XNB record on the parent. A
+// child the budget left unexpanded (ignored/scan-limit) fails both merge tests,
+// so the children of a partly scanned organizer always pass through unmerged.
 func consolidate(folder string, children []Record) []Record {
 	if len(children) <= 1 {
 		return children
@@ -451,30 +583,54 @@ func consolidate(folder string, children []Record) []Record {
 // collectFiles lists every file below folder, pruning only directories whose
 // name matches the metadata rules (dot-directories are walked, as SMAPI does).
 // Descents are guarded against cycles; a folder that can't be read simply
-// contributes nothing.
-func (s *scanner) collectFiles(folder string) []string {
+// contributes nothing. complete is false when the scan's folder budget ran out
+// mid-walk: the list is then a fragment, which callers must report rather than
+// classify from.
+func (s *scanner) collectFiles(folder string) (files []string, complete bool) {
 	var out []string
-	s.walkFiles(folder, true, &out)
-	return out
+	complete = s.walkFiles(folder, true, &out)
+	return out, complete
 }
 
-func (s *scanner) walkFiles(folder string, isStart bool, out *[]string) {
+// walkFiles lists the files below folder, reporting false when a bound stopped
+// it short: a budget ran out, or a subfolder sits deeper than maxScanDepth. A
+// cycle prune is not a truncation: the guard cuts a loop already seen at this
+// path, and what has been listed stays usable for classification.
+func (s *scanner) walkFiles(folder string, isStart bool, out *[]string) bool {
 	if !isStart && !s.enter(folder) {
-		return
+		return true
+	}
+	if !s.spend() {
+		return false
 	}
 	entries, err := fs.ReadDir(s.fsys, folder)
 	if err != nil {
-		return
+		return true
 	}
+	complete := true
 	for _, entry := range entries {
+		if s.done {
+			return false
+		}
+		if !s.examine() {
+			return false
+		}
 		if s.isDir(entry, folder) {
 			if relevantName(entry.Name()) {
-				s.walkFiles(path.Join(folder, entry.Name()), false, out)
+				child := path.Join(folder, entry.Name())
+				if tooDeep(child) {
+					s.halt()
+					return false
+				}
+				if !s.walkFiles(child, false, out) {
+					complete = false
+				}
 			}
 			continue
 		}
 		*out = append(*out, entry.Name())
 	}
+	return complete
 }
 
 // looseRootRecord reports mod-looking files sitting directly in the Mods root,
