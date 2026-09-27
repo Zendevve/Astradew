@@ -21,6 +21,40 @@ const (
 	stageSubject  = "<stage>"
 )
 
+// PRD section 73 audit. Every required regression case and the case below that
+// pins it — all of them cases of TestExtractRefusals unless another test is
+// named — so a green run is traceable back to the PRD list:
+//
+//	../../escape              -> "nested dot-dot segment" (two levels, "/")
+//	                             and "dot-dot segment" (one level)
+//	..\..\escape              -> "backslash dot-dot traversal"
+//	C:\escape                 -> "backslash drive-absolute path"
+//	                             ("drive-absolute path" pins the "/" spelling)
+//	\\server\share            -> "UNC path"
+//	absolute Unix path        -> "absolute path"
+//	symlink outside temp root -> "symlink entry", whose target is
+//	                             ../../etc/passwd; the refusal is wholesale,
+//	                             so no link is created anywhere
+//	archive bomb              -> "archive over the ratio limit",
+//	                             "ratio limit is not widened by a lying
+//	                             compressed size" (the rule reads bytes, not
+//	                             the declaration), "archive over the
+//	                             expanded-byte limit", and the byte/entry
+//	                             limit cases beside them
+//	very long path            -> "over-long path" and "over-deep path"
+//	reserved Windows filename -> "reserved device name", "reserved device name
+//	                             with an extension", "reserved console name"
+//	mixed slash traversal     -> "mixed slash traversal"
+//	Unicode path confusion    -> "case collision under simple folding" (the
+//	                             sigma folding cycle) and "non-UTF-8 name";
+//	                             normalization-only collisions are
+//	                             deliberately not detected — checkNames leaves
+//	                             those to the host — so no refusal case exists
+//	                             for them here and none is invented.
+//
+// The isolation half each traversal case also owes is proved by the runner for
+// every case (assertOnlyNew over the parent listing plus the source hash) and
+// named for the hostile case by TestExtractRefusalWritesNothingOutsideTheStage.
 func TestExtractRefusals(t *testing.T) {
 	// archiveOf is the common build: one fixture written to disk.
 	archiveOf := func(fixture *Fixture) func(t *testing.T) string {
@@ -82,6 +116,35 @@ func TestExtractRefusals(t *testing.T) {
 			build:    archiveOf(NewFixture().File(`Mod\sub\x.txt`, "x")),
 			wantCode: apperror.CodeArchivePathTraversal,
 			want:     `Mod\sub\x.txt`,
+		},
+		{
+			// PRD section 73 `..\..\escape`: the Windows spelling of the
+			// nested dot-dot escape. Every backslash name is refused, so this
+			// pins that the escape is refused in that spelling too, and that
+			// the refusal names the entry as written.
+			name:     "backslash dot-dot traversal",
+			build:    archiveOf(NewFixture().File(`..\..\escape.txt`, "x")),
+			wantCode: apperror.CodeArchivePathTraversal,
+			want:     `..\..\escape.txt`,
+		},
+		{
+			// PRD section 73 `C:\escape`: the backslash spelling of the drive
+			// escape. The backslash rule fires before the drive check, which
+			// is the order namePolicy documents; the code and subject a user
+			// sees are the same either way.
+			name:     "backslash drive-absolute path",
+			build:    archiveOf(NewFixture().File(`C:\escape.txt`, "x")),
+			wantCode: apperror.CodeArchivePathTraversal,
+			want:     `C:\escape.txt`,
+		},
+		{
+			// PRD section 73 "mixed slash traversal": a forward-slash prefix
+			// with a backslash dot-dot segment — the shape a tool that
+			// normalised one separator but not the other would produce.
+			name:     "mixed slash traversal",
+			build:    archiveOf(NewFixture().File(`Mod/..\escape.txt`, "x")),
+			wantCode: apperror.CodeArchivePathTraversal,
+			want:     `Mod/..\escape.txt`,
 		},
 		{
 			name:     "empty component",

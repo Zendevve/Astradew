@@ -54,8 +54,9 @@ type Value struct {
 	Description string `json:"description"`
 }
 
-// Registry lists every setting this build declares. Small and honest: a UI
-// presentation preference and a behavioural toggle.
+// Registry lists every setting this build declares. Small and honest: a pair
+// of UI presentation preferences, a behavioural toggle, the installs pointer,
+// and the six archive-inspection budgets.
 var Registry = []Setting{
 	{
 		Name:        "theme",
@@ -104,6 +105,95 @@ var Registry = []Setting{
 			id, _ := value.(int)
 			if id < 1 {
 				return fmt.Errorf("want >= 1, got %d", id)
+			}
+			return nil
+		},
+	},
+	// The six archive-inspection budgets, mirroring internal/archive's
+	// DefaultLimits field for field (TestArchiveLimitDefaultsMatchArchive
+	// guards the correspondence both ways). The byte budgets are far past
+	// int32 — the ceilings alone reach 1 TiB — and they are stored as the
+	// platform int, which is why this layer relies on every desktop target
+	// being 64-bit: decode parses a stored number through Int64 before
+	// narrowing to int, so a 1 TiB value survives the settings row and
+	// reaches archive.Limits' int64 fields intact. The ceilings are hard
+	// limits: a setting may tune a budget down for archives the user trusts,
+	// but it can never push one past what issue #55 fixes, because that is
+	// what would turn the protection off.
+	{
+		Name:        "archive-limit-archive-bytes",
+		Kind:        KindInt,
+		Default:     2 << 30,
+		Description: "Largest source archive Astradew will inspect, in bytes (up to 1 TiB).",
+		Validate: func(value any) error {
+			bytes, _ := value.(int)
+			if bytes < 1 || bytes > 1<<40 {
+				return fmt.Errorf("want 1 to %d, got %d", 1<<40, bytes)
+			}
+			return nil
+		},
+	},
+	{
+		Name:        "archive-limit-expanded-bytes",
+		Kind:        KindInt,
+		Default:     4 << 30,
+		Description: "Most bytes an archive may expand to in the stage, in total (up to 1 TiB).",
+		Validate: func(value any) error {
+			bytes, _ := value.(int)
+			if bytes < 1 || bytes > 1<<40 {
+				return fmt.Errorf("want 1 to %d, got %d", 1<<40, bytes)
+			}
+			return nil
+		},
+	},
+	{
+		Name:        "archive-limit-entries",
+		Kind:        KindInt,
+		Default:     20_000,
+		Description: "Most entries one archive may contain (up to 1,000,000).",
+		Validate: func(value any) error {
+			entries, _ := value.(int)
+			if entries < 1 || entries > 1_000_000 {
+				return fmt.Errorf("want 1 to %d, got %d", 1_000_000, entries)
+			}
+			return nil
+		},
+	},
+	{
+		Name:        "archive-limit-ratio",
+		Kind:        KindInt,
+		Default:     100,
+		Description: "Highest uncompressed-to-compressed ratio one entry may reach, after a 1 MiB grace (up to 10,000).",
+		Validate: func(value any) error {
+			ratio, _ := value.(int)
+			if ratio < 1 || ratio > 10_000 {
+				return fmt.Errorf("want 1 to %d, got %d", 10_000, ratio)
+			}
+			return nil
+		},
+	},
+	{
+		Name:        "archive-limit-path-depth",
+		Kind:        KindInt,
+		Default:     32,
+		Description: "Deepest entry path Astradew will extract, in path components (up to 256).",
+		Validate: func(value any) error {
+			depth, _ := value.(int)
+			if depth < 1 || depth > 256 {
+				return fmt.Errorf("want 1 to %d, got %d", 256, depth)
+			}
+			return nil
+		},
+	},
+	{
+		Name:        "archive-limit-path-bytes",
+		Kind:        KindInt,
+		Default:     240,
+		Description: "Longest entry path Astradew will extract, in bytes (up to 4,096).",
+		Validate: func(value any) error {
+			bytes, _ := value.(int)
+			if bytes < 1 || bytes > 4_096 {
+				return fmt.Errorf("want 1 to %d, got %d", 4_096, bytes)
 			}
 			return nil
 		},
