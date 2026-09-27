@@ -1,0 +1,7 @@
+# Inspect an archive into a temporary stage, refusing violations wholesale
+
+Inspection never touches the source archive: it is hashed over a read-only handle and re-checked after extraction, and everything written goes into a temporary stage the caller removes when the inspection ends. The alternative — unpacking beside the download, or copying the archive in first — would leave a second mutable copy in the user's own tree. The stage is scratch, never a record; what survives a run is the task row (ADR 0006).
+
+The extracted tree is identified by the listing ADR 0009's content-addressed store keys on: files in ascending relative-path byte order, each contributing its path, a NUL, its SHA-256, a NUL, and its size, with empty directories, mtimes, and modes contributing nothing. Because that listing is a storage key, revising it later would re-identify every stored package; inspection and the library therefore have to agree from the start.
+
+Refusals are whole-archive and land before the stage exists: symlink entries are never created wherever they point, and any policy or limit violation — a name the host cannot represent, encryption, entry counts, expansion bounds — refuses the archive at the first offending entry, naming it. Nothing is sanitised the way ADR 0007 permits at deploy, because a name quietly repaired is a name the user never sees. Accepting such an archive later is the easy direction.

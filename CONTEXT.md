@@ -14,6 +14,14 @@ _Avoid_: Package
 The contents represented by one archive import or folder import. A Package may contain several independently loadable Mod Units.
 _Avoid_: Archive, Mod Unit
 
+**Archive Inspection**:
+The read-only examination of one Archive that yields an Install Preview. It never modifies the source Archive, and nothing it writes outlives the examination.
+_Avoid_: Scan
+
+**Install Preview**:
+What an Archive Inspection reports: the Mod Units a Package would contribute, its findings, and its installability.
+_Avoid_: Preview
+
 **Mod Unit**:
 One SMAPI-loadable folder described by its own Manifest. A Mod Unit may be a code mod or a Content Pack.
 _Avoid_: Package
