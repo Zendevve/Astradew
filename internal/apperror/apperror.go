@@ -86,6 +86,57 @@ const (
 	// bound Task method). Callers branch on the code, never on message
 	// text.
 	CodeTaskNotFound Code = "TASK_NOT_FOUND"
+	// CodeArchiveUnreadable refuses a source archive that cannot be read as
+	// one file: missing, not a regular file, unreadable, or changed while it
+	// was being inspected. Recoverable: pick or re-download the file and
+	// retry. Details name the path and the reason.
+	CodeArchiveUnreadable Code = "ARCHIVE_UNREADABLE"
+
+	// CodeArchivePathTraversal refuses an archive holding an entry that is
+	// rooted or escapes the staging root: absolute, drive, UNC or device
+	// paths, `..` segments, backslashes, empty or dot components.
+	// Recoverable: the archive is malformed or hostile; obtain a clean copy.
+	// Details name the offending entry and the reason.
+	CodeArchivePathTraversal Code = "ARCHIVE_PATH_TRAVERSAL"
+
+	// CodeArchiveLinkEntry refuses an archive holding a symlink entry. The
+	// refusal is wholesale and deliberate: no link is ever created, wherever
+	// it points. Recoverable: obtain a clean copy of the archive. Details
+	// name the offending entry.
+	CodeArchiveLinkEntry Code = "ARCHIVE_LINK_ENTRY"
+
+	// CodeArchiveEncrypted refuses an archive holding an encrypted (password
+	// protected) entry, which cannot be inspected. Recoverable: obtain an
+	// unencrypted copy. Details name the offending entry.
+	CodeArchiveEncrypted Code = "ARCHIVE_ENCRYPTED"
+
+	// CodeArchiveNameInvalid refuses an archive holding a name the host
+	// filesystem cannot represent: reserved device names, illegal characters,
+	// NUL bytes, trailing dots or spaces, over-long components, and names
+	// colliding under case folding or as both file and directory. Nothing is
+	// ever renamed. Recoverable: obtain a clean copy. Details name the
+	// offending entry and the reason.
+	CodeArchiveNameInvalid Code = "ARCHIVE_NAME_INVALID"
+
+	// CodeArchiveLimitExceeded refuses an archive that breaks a configured
+	// safety limit: archive bytes, expanded bytes, entry count, compression
+	// ratio, path depth, or path length. Recoverable: raise the limit in
+	// settings if the archive is trusted. Details name the entry (or archive)
+	// and the limit that fired with its value.
+	CodeArchiveLimitExceeded Code = "ARCHIVE_LIMIT_EXCEEDED"
+
+	// CodeArchiveCorrupt refuses an archive that is not a readable ZIP:
+	// unparseable central directory, unknown compression method, CRC
+	// mismatch, short read, or a directory entry carrying data. Recoverable:
+	// re-download the file. Details name the offending entry (where there is
+	// one) and the reason.
+	CodeArchiveCorrupt Code = "ARCHIVE_CORRUPT"
+
+	// CodeInspectionFailed refuses an inspection whose staging step failed:
+	// the stage directory could not be created or written (disk full,
+	// permission denied, unexpected I/O). Recoverable: free space or fix
+	// permissions and retry. Details name the path and the OS error.
+	CodeInspectionFailed Code = "INSPECTION_FAILED"
 )
 
 // AppError is a typed service failure. It crosses to TypeScript as the cause
