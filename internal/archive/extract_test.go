@@ -22,9 +22,10 @@ import (
 	"github.com/Zendevve/astradew/internal/apperror"
 )
 
-// TestDefaultLimits pins the six numbers the settings registry defaults to and
-// the field-by-field rule for a Limits a caller filled in only partly: a zero
-// or negative field is not a limit, it is "no opinion".
+// TestDefaultLimits pins the six numbers DefaultLimits returns — the values the
+// settings registry will default to when the inspection service lands — and the
+// field-by-field rule for a Limits a caller filled in only partly: a zero or
+// negative field is not a limit, it is "no opinion".
 func TestDefaultLimits(t *testing.T) {
 	want := Limits{
 		MaxArchiveBytes:  2 << 30,

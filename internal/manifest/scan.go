@@ -466,8 +466,7 @@ func (s *scanner) readFolder(folder string, entries []fs.DirEntry) Record {
 // skip the read: the scanner has to know which file it is about to consult
 // before it can ask whether that file's stat was already parsed.
 func (s *scanner) manifestPath(folder string, entries []fs.DirEntry) (string, error) {
-	const conventional = "manifest.json"
-	name := path.Join(folder, conventional)
+	name := path.Join(folder, ManifestFileName)
 	_, err := fs.Stat(s.fsys, name)
 	switch {
 	case err == nil:
@@ -479,7 +478,7 @@ func (s *scanner) manifestPath(folder string, entries []fs.DirEntry) (string, er
 		return "", fs.ErrNotExist
 	}
 	for _, entry := range entries {
-		if !s.isDir(entry, folder) && strings.EqualFold(entry.Name(), conventional) {
+		if !s.isDir(entry, folder) && IsManifestName(entry.Name(), true) {
 			return path.Join(folder, entry.Name()), nil
 		}
 	}
@@ -661,21 +660,49 @@ func (s *scanner) looseRootRecord(entries []fs.DirEntry) *Record {
 	}
 }
 
-// relevantName is SMAPI's name filter for files and folders: metadata names are
-// pruned. The dot-prefix rules differ between files and folders and live in
-// their own checks.
-func relevantName(name string) bool {
+// ManifestFileName is the name a Mod Unit's manifest must carry. It is part of
+// the package's exported surface because the inspection layer resolves the same
+// name — at a staged tree's root, and when probing a manifest-less folder — and
+// a second spelling of it there would be a second rule.
+const ManifestFileName = "manifest.json"
+
+// IsManifestName reports whether a file name is a manifest's name: the
+// conventional spelling always, any spelling equal to it under Unicode case
+// folding only when caseInsensitive is set. It is the scanner's own lookup rule
+// (see manifestPath), exported so every caller resolves manifests the same way.
+func IsManifestName(name string, caseInsensitive bool) bool {
+	if name == ManifestFileName {
+		return true
+	}
+	return caseInsensitive && strings.EqualFold(name, ManifestFileName)
+}
+
+// IsMetadataName reports whether a file or folder name is manager or
+// filesystem metadata SMAPI prunes by name: the macOS zip and resource-fork
+// artefacts (__MACOSX, ._*, .DS_Store), Mono's mcs symlink, the Windows shell
+// files (desktop.ini, Thumbs.db), and the Vortex marker. The comparison is
+// case-insensitive, as SMAPI's is. It is exported because the inspection layer
+// walks a staged tree by the same rule, and a second copy of this table would
+// be a second authority on what is metadata and what is a mod.
+func IsMetadataName(name string) bool {
 	switch {
 	case strings.EqualFold(name, "__folder_managed_by_vortex"), // Vortex marker
 		strings.EqualFold(name, "__MACOSX"), // macOS metadata
 		strings.EqualFold(name, "mcs"),      // Mono compiler output
 		strings.EqualFold(name, "desktop.ini"),
 		strings.EqualFold(name, "Thumbs.db"):
-		return false
+		return true
 	case strings.HasPrefix(name, "._"), strings.EqualFold(name, ".DS_Store"):
-		return false
+		return true
 	}
-	return true
+	return false
+}
+
+// relevantName is SMAPI's name filter for files and folders: metadata names are
+// pruned. The dot-prefix rules differ between files and folders and live in
+// their own checks.
+func relevantName(name string) bool {
+	return !IsMetadataName(name)
 }
 
 // relevantFile is SMAPI's file filter: ignored extensions and dot-files don't

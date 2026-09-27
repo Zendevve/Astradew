@@ -120,9 +120,9 @@ const (
 
 	// CodeArchiveLimitExceeded refuses an archive that breaks a configured
 	// safety limit: archive bytes, expanded bytes, entry count, compression
-	// ratio, path depth, or path length. Recoverable: raise the limit in
-	// settings if the archive is trusted. Details name the entry (or archive)
-	// and the limit that fired with its value.
+	// ratio, path depth, or path length. Recoverable: raise the limit for an
+	// archive that is trusted. Details name the entry (or archive) and the
+	// limit that fired with its value.
 	CodeArchiveLimitExceeded Code = "ARCHIVE_LIMIT_EXCEEDED"
 
 	// CodeArchiveCorrupt refuses an archive that is not a readable ZIP:

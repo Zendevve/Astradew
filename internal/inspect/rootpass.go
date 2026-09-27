@@ -16,9 +16,6 @@ import (
 )
 
 const (
-	// conventionalManifest is the file name SMAPI reads a Mod Unit's manifest
-	// from: a unit's own folder root, or — here — the stage root itself.
-	conventionalManifest = "manifest.json"
 	// rootContentDir and smapiPayloadDir are the two top-level directories the
 	// root pass classifies. Both are compared case-insensitively, the way the
 	// package may spell them after a round trip through an archive, and both
@@ -132,15 +129,15 @@ func inspectRoot(fsys fs.FS, opts Options) rootPass {
 // non-nil error is a stat failure on the conventional name, reported at that
 // path.
 func rootManifestName(fsys fs.FS, entries []fs.DirEntry, caseInsensitive bool) (string, bool, error) {
-	info, err := fs.Stat(fsys, conventionalManifest)
+	info, err := fs.Stat(fsys, manifest.ManifestFileName)
 	switch {
 	case err == nil && !info.IsDir():
-		return conventionalManifest, true, nil
+		return manifest.ManifestFileName, true, nil
 	case err == nil:
 		// A folder named manifest.json is not a manifest; the case-insensitive
 		// fallback below still may find a differently-cased file.
 	case !errors.Is(err, fs.ErrNotExist):
-		return conventionalManifest, false, err
+		return manifest.ManifestFileName, false, err
 	}
 	if !caseInsensitive {
 		return "", false, nil
@@ -149,7 +146,7 @@ func rootManifestName(fsys fs.FS, entries []fs.DirEntry, caseInsensitive bool) (
 		if isDir(fsys, ".", entry) {
 			continue
 		}
-		if strings.EqualFold(entry.Name(), conventionalManifest) {
+		if manifest.IsManifestName(entry.Name(), true) {
 			return entry.Name(), true, nil
 		}
 	}
@@ -254,21 +251,9 @@ func walkBounded(fsys fs.FS, dir string, visit func(rel string) bool) {
 }
 
 // prunedName reports whether the scanner's name filter drops a name: the
-// manager metadata names it matches outright, and every dot-prefixed name
-// (SMAPI's file filter drops dot-files, its traversal drops dot-folders). The
-// table mirrors internal/manifest's unexported filter, which stays the
-// scanner's authority on what is metadata and what is a mod.
+// manager metadata names it matches outright (manifest.IsMetadataName, so this
+// walk and the scanner share one authority) and every dot-prefixed name
+// (SMAPI's file filter drops dot-files, its traversal drops dot-folders).
 func prunedName(name string) bool {
-	if strings.HasPrefix(name, ".") { // .DS_Store and ._* resource forks included
-		return true
-	}
-	switch {
-	case strings.EqualFold(name, "__folder_managed_by_vortex"), // Vortex marker
-		strings.EqualFold(name, "__MACOSX"), // macOS metadata
-		strings.EqualFold(name, "mcs"),      // Mono compiler output
-		strings.EqualFold(name, "desktop.ini"),
-		strings.EqualFold(name, "Thumbs.db"):
-		return true
-	}
-	return false
+	return strings.HasPrefix(name, ".") || manifest.IsMetadataName(name)
 }

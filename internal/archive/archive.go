@@ -52,10 +52,20 @@
 //   - Names are not decoded, but they must be valid UTF-8. CP437 (or any other
 //     legacy encoding) entry names are refused rather than transcoded: Windows
 //     would silently replace their bytes with U+FFFD when it created the file,
-//     macOS would refuse to create it at all, and the fs.FS seam the
+//     and macOS would refuse to create it at all, and the fs.FS seam the
 //     classification layer reads the stage through cannot spell such a name.
 //     Refusing is what keeps the archive's names and the stage's names the same
 //     on every host, and what keeps "nothing is ever silently renamed" true.
+//
+//   - ADR 0007's naming rule is narrowed rather than applied here. That ADR
+//     keeps a Package's shipped folder names at deploy, sanitised where the
+//     platform rejects them — reserved device names, illegal characters,
+//     trailing dots and spaces — with a suffix on collision. Extraction
+//     refuses those archives instead, before a name exists to sanitise, because
+//     issue #55 fixes the refusal as the contract ("never silently renamed")
+//     and a name no host can hold is better named to the user than repaired
+//     quietly. The ADR still governs deployment of names that reach it by other
+//     paths, which is untouched by this package.
 package archive
 
 import (
@@ -67,7 +77,10 @@ import (
 // Limits bounds what inspecting one archive may cost: how big the source may
 // be, how much it may expand to, how many entries it may carry, how far any one
 // entry may compress, and how long and deep any entry name may be. Every field
-// is also a settings key, so a user can raise a limit for an archive they trust.
+// becomes a settings key when the inspection service lands, so a user will be
+// able to raise a limit for an archive they trust; until then the service
+// ticket is what fills these in, and the fields are the seam it fills them
+// through.
 //
 // A zero or negative field means "use DefaultLimits for this field", which
 // makes a partly-filled Limits the natural way to tune one limit; callers with
@@ -97,7 +110,8 @@ type Limits struct {
 }
 
 // The default limits. The numbers follow the survey in
-// docs/phase3-research/zip-semantics.md section 8: ClamAV's per-file /
+// docs/phase3-research/zip-semantics.md section 8 on the research/zip-semantics
+// branch, the citation issue #55 records: ClamAV's per-file /
 // cumulative / count model for the byte and entry budgets (the closest
 // structural fit for the safety list), Apache POI's inflate-ratio guard for the
 // ratio — the only first-party ratio default found in the field — and the
@@ -130,7 +144,8 @@ const (
 )
 
 // DefaultLimits returns the limits Extract applies to any field the caller left
-// unset, and the values the settings registry defaults to.
+// unset; they are also the values the settings registry will default to when
+// the inspection service lands.
 func DefaultLimits() Limits {
 	return Limits{
 		MaxArchiveBytes:  defaultMaxArchiveBytes,

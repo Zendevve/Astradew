@@ -74,7 +74,7 @@ func looseRootsMessage(record manifest.Record) string {
 func hiddenManifestFindings(fsys fs.FS, folder string, opts Options) []Finding {
 	findings := []Finding{}
 	walkBounded(fsys, folder, func(rel string) bool {
-		if !isManifestName(path.Base(rel), opts.CaseInsensitivePaths) {
+		if !manifest.IsManifestName(path.Base(rel), opts.CaseInsensitivePaths) {
 			return true
 		}
 		findings = append(findings, Finding{
@@ -83,14 +83,4 @@ func hiddenManifestFindings(fsys fs.FS, folder string, opts Options) []Finding {
 		return true
 	})
 	return findings
-}
-
-// isManifestName reports whether a file name is a manifest, mirroring the
-// scanner's lookup: the conventional spelling always, a case-insensitive match
-// only under the option.
-func isManifestName(name string, caseInsensitive bool) bool {
-	if name == conventionalManifest {
-		return true
-	}
-	return caseInsensitive && strings.EqualFold(name, conventionalManifest)
 }
