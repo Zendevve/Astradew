@@ -88,11 +88,17 @@ func TestSweepStagesReportsAnUnreadableArea(t *testing.T) {
 // a removal at all — Windows refuses one while a handle is open, a unix-like
 // host refuses one inside a directory it may not write — so a host that cannot
 // (root, or a filesystem that permits anything) skips rather than asserts.
+//
+// The names are ordered deliberately: the sweep reads its area in sorted order,
+// so the undeletable stage has to come first. Were it last, a sweep that gave
+// up on the first failure would remove the later stage anyway and still report
+// the same count and error, and this test would pass against exactly the
+// regression it exists to catch.
 func TestSweepStagesContinuesPastAFailedRemoval(t *testing.T) {
 	tempRoot := t.TempDir()
-	stuck := StageDir(tempRoot, "stuck")
+	stuck := StageDir(tempRoot, "aaa-stuck")
 	writeInto(t, stuck, "held.txt", "held")
-	later := StageDir(tempRoot, "later")
+	later := StageDir(tempRoot, "zzz-later")
 	writeInto(t, later, "keep.txt", "x")
 
 	release, refused := blockRemoval(t, stuck, filepath.Join(stuck, "held.txt"))
