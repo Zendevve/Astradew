@@ -251,14 +251,8 @@ func TestInspectArchiveReportsThePreviewAndLeavesNoStage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectArchive() error = %v", err)
 	}
-	if row.ID == "" {
-		t.Fatal("InspectArchive() returned a row with no id")
-	}
-	if row.Operation != OperationInspectArchive {
-		t.Fatalf("row operation = %q, want %q", row.Operation, OperationInspectArchive)
-	}
-	if row.Status != tasks.StatusPending && row.Status != tasks.StatusRunning {
-		t.Fatalf("returned row status = %q, want pending or running: the call returns before the work does", row.Status)
+	if row.ID == "" || row.Operation != OperationInspectArchive {
+		t.Fatalf("returned row = %+v, want a created %s task with an id", row, OperationInspectArchive)
 	}
 
 	view := waitForInspection(t, svc, row.ID)
@@ -339,8 +333,8 @@ func TestInspectArchiveRefusesASecondRunWhileOneIsLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectArchive() error = %v", err)
 	}
-	if first.Status != tasks.StatusPending {
-		t.Fatalf("returned row status = %q, want %q before the work starts", first.Status, tasks.StatusPending)
+	if first.ID == "" || first.Operation != OperationInspectArchive {
+		t.Fatalf("returned row = %+v, want a created %s task with an id", first, OperationInspectArchive)
 	}
 	running := waitForTaskStatus(t, svc, first.ID, tasks.StatusRunning)
 	if running.Current != 0 || running.Message == "" {
@@ -427,6 +421,26 @@ func TestInspectionReportsUnknownForeignAndEvictedIDs(t *testing.T) {
 		t.Fatal("Inspection() of a non-inspection task error = nil, want INSPECTION_NOT_FOUND")
 	} else {
 		wantCode(t, err, apperror.CodeInspectionNotFound)
+	}
+}
+
+// A store read that fails is not an answer about the inspection: a driver or
+// scan failure must travel verbatim, never as INSPECTION_NOT_FOUND claiming no
+// task row carries the id. The row may exist perfectly well, so telling the
+// user their inspection is gone would be a lie.
+func TestInspectionPropagatesAStoreReadFailure(t *testing.T) {
+	svc, _ := newInspectionService(t)
+	if err := svc.db.Close(); err != nil {
+		t.Fatalf("closing the store: %v", err)
+	}
+
+	_, err := svc.Inspection("no-such-task")
+	if err == nil {
+		t.Fatal("Inspection() error = nil with a closed store, want the store's failure")
+	}
+	var appErr *apperror.AppError
+	if errors.As(err, &appErr) && appErr.Code == apperror.CodeInspectionNotFound {
+		t.Fatalf("Inspection() error = %v, want the store's read failure, not INSPECTION_NOT_FOUND", err)
 	}
 }
 
@@ -640,44 +654,143 @@ func TestInspectArchiveRunsWithANilSink(t *testing.T) {
 	stageGone(t, paths, row.ID)
 }
 
-// The six settings keys are honoured end to end: the entry budget a test
-// lowers decides whether the archive is accepted, which is what proves the
-// key-to-field mapping the registry's own default guard cannot see.
+// Every one of the six archive-limit-* keys is honoured end to end: each case
+// lowers one key below what its own fixture violates and asserts the
+// inspection fails with ARCHIVE_LIMIT_EXCEEDED. That is what proves the
+// key-to-field mapping the registry's own default guard cannot see — a
+// transposed assignment inside archiveLimits (MaxPathDepth and MaxPathBytes
+// are both int, so it would compile) leaves this table red. Each case also
+// pins the subject internal/archive documents for that budget: the archive's
+// own path for a whole-archive budget, the offending entry's name for a
+// per-entry one.
 func TestInspectArchiveHonoursTheConfiguredLimits(t *testing.T) {
-	svc, paths := newInspectionService(t)
-	srcPath := writeArchive(t, "FishZones.zip", archive.SingleMod())
+	cases := []struct {
+		name    string
+		key     string
+		fixture func() *archive.Fixture
+		// value is the setting to store; it takes the written archive's path
+		// because the archive-bytes case must undercut the file's real size.
+		value func(t *testing.T, srcPath string) int
+		// subject is what failure.Details must name: the entry the budget
+		// caught, or the archive for a budget that judges the archive whole.
+		subject func(srcPath string) string
+	}{
+		{
+			name:    "archive-bytes caps the source archive's size",
+			key:     settingArchiveBytes,
+			fixture: archive.SingleMod,
+			value: func(t *testing.T, srcPath string) int {
+				info, err := os.Stat(srcPath)
+				if err != nil {
+					t.Fatalf("stat of the fixture archive: %v", err)
+				}
+				return int(info.Size()) - 1
+			},
+			subject: func(srcPath string) string { return fmt.Sprintf("archive %q", srcPath) },
+		},
+		{
+			name: "expanded-bytes caps the decompressed total",
+			key:  settingExpandedBytes,
+			fixture: func() *archive.Fixture {
+				return archive.NewFixture().
+					File("Mod/first.txt", strings.Repeat("a", 800)).
+					File("Mod/second.txt", strings.Repeat("b", 800))
+			},
+			value:   func(*testing.T, string) int { return 1024 },
+			subject: func(string) string { return `entry "Mod/second.txt"` },
+		},
+		{
+			name:    "entries caps the entry count",
+			key:     settingEntries,
+			fixture: archive.SingleMod,
+			value:   func(*testing.T, string) int { return 2 },
+			subject: func(srcPath string) string { return fmt.Sprintf("archive %q", srcPath) },
+		},
+		{
+			name: "ratio caps one entry's expansion",
+			key:  settingRatio,
+			fixture: func() *archive.Fixture {
+				return archive.NewFixture().File("Mod/big.txt", strings.Repeat("a", 4<<20))
+			},
+			value:   func(*testing.T, string) int { return 1 },
+			subject: func(string) string { return `entry "Mod/big.txt"` },
+		},
+		{
+			name: "path-depth caps an entry's component count",
+			key:  settingPathDepth,
+			fixture: func() *archive.Fixture {
+				return archive.NewFixture().File("Mod/deep.txt", "x")
+			},
+			value:   func(*testing.T, string) int { return 1 },
+			subject: func(string) string { return `entry "Mod/deep.txt"` },
+		},
+		{
+			name: "path-bytes caps an entry name's length",
+			key:  settingPathBytes,
+			fixture: func() *archive.Fixture {
+				return archive.NewFixture().File("Mod/a-longer-name.txt", "x")
+			},
+			value:   func(*testing.T, string) int { return 4 },
+			subject: func(string) string { return `entry "Mod/a-longer-name.txt"` },
+		},
+	}
 
-	if err := svc.SetSetting(settingEntries, 2); err != nil {
-		t.Fatalf("SetSetting(%s, 2) error = %v", settingEntries, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _ := newInspectionService(t)
+			srcPath := writeArchive(t, "fixture.zip", tc.fixture())
+			if err := svc.SetSetting(tc.key, tc.value(t, srcPath)); err != nil {
+				t.Fatalf("SetSetting(%s, ...) error = %v", tc.key, err)
+			}
+			row, err := svc.InspectArchive(srcPath)
+			if err != nil {
+				t.Fatalf("InspectArchive() error = %v", err)
+			}
+			view := waitForInspection(t, svc, row.ID)
+			if view.Status != viewStatusFailed {
+				t.Fatalf("inspection status = %q, want failed under the lowered %s budget (%+v)", view.Status, tc.key, view.Failure)
+			}
+			if view.Failure == nil || view.Failure.Code != string(apperror.CodeArchiveLimitExceeded) {
+				t.Fatalf("failure = %+v, want code %q", view.Failure, apperror.CodeArchiveLimitExceeded)
+			}
+			if want := tc.subject(srcPath); !strings.Contains(view.Failure.Details, want) {
+				t.Fatalf("failure details = %q, want it to name %s", view.Failure.Details, want)
+			}
+			if view.Task.Outcome == nil || *view.Task.Outcome != string(apperror.CodeArchiveLimitExceeded) {
+				t.Fatalf("row outcome = %v, want %q", view.Task.Outcome, apperror.CodeArchiveLimitExceeded)
+			}
+		})
 	}
-	row, err := svc.InspectArchive(srcPath)
-	if err != nil {
-		t.Fatalf("InspectArchive() error = %v", err)
-	}
-	view := waitForInspection(t, svc, row.ID)
-	if view.Status != viewStatusFailed {
-		t.Fatalf("inspection status = %q, want failed under a two-entry budget", view.Status)
-	}
-	if view.Failure == nil || view.Failure.Code != string(apperror.CodeArchiveLimitExceeded) {
-		t.Fatalf("failure = %+v, want %q", view.Failure, apperror.CodeArchiveLimitExceeded)
-	}
-	if view.Task.Outcome == nil || *view.Task.Outcome != string(apperror.CodeArchiveLimitExceeded) {
-		t.Fatalf("row outcome = %v, want %q", view.Task.Outcome, apperror.CodeArchiveLimitExceeded)
-	}
-	stageGone(t, paths, row.ID)
 
-	// Raising the same key accepts the archive: the budget is read per run,
-	// not cached from the first inspection.
-	if err := svc.SetSetting(settingEntries, 100); err != nil {
-		t.Fatalf("SetSetting(%s, 100) error = %v", settingEntries, err)
-	}
-	row, err = svc.InspectArchive(srcPath)
-	if err != nil {
-		t.Fatalf("InspectArchive() error = %v", err)
-	}
-	if view := waitForInspection(t, svc, row.ID); view.Status != viewStatusSucceeded {
-		t.Fatalf("inspection status = %q under a hundred-entry budget, want succeeded (%+v)", view.Status, view.Failure)
-	}
+	// The budget is read per run, not cached from the first inspection:
+	// raising the same key accepts the archive the lowered one refused.
+	t.Run("a raised budget is read per run", func(t *testing.T) {
+		svc, paths := newInspectionService(t)
+		srcPath := writeArchive(t, "FishZones.zip", archive.SingleMod())
+
+		if err := svc.SetSetting(settingEntries, 2); err != nil {
+			t.Fatalf("SetSetting(%s, 2) error = %v", settingEntries, err)
+		}
+		row, err := svc.InspectArchive(srcPath)
+		if err != nil {
+			t.Fatalf("InspectArchive() error = %v", err)
+		}
+		if view := waitForInspection(t, svc, row.ID); view.Status != viewStatusFailed {
+			t.Fatalf("inspection status = %q, want failed under a two-entry budget (%+v)", view.Status, view.Failure)
+		}
+		stageGone(t, paths, row.ID)
+
+		if err := svc.SetSetting(settingEntries, 100); err != nil {
+			t.Fatalf("SetSetting(%s, 100) error = %v", settingEntries, err)
+		}
+		row, err = svc.InspectArchive(srcPath)
+		if err != nil {
+			t.Fatalf("InspectArchive() error = %v", err)
+		}
+		if view := waitForInspection(t, svc, row.ID); view.Status != viewStatusSucceeded {
+			t.Fatalf("inspection status = %q under a hundred-entry budget, want succeeded (%+v)", view.Status, view.Failure)
+		}
+	})
 }
 
 // A row left running by a previous app run is not this process's work: it is

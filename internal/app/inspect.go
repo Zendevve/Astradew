@@ -23,12 +23,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/Zendevve/astradew/internal/apperror"
 	"github.com/Zendevve/astradew/internal/archive"
 	"github.com/Zendevve/astradew/internal/inspect"
 	"github.com/Zendevve/astradew/internal/settings"
+	"github.com/Zendevve/astradew/internal/store"
 	"github.com/Zendevve/astradew/internal/tasks"
 )
 
@@ -223,16 +223,16 @@ func (s *ApplicationService) Inspection(taskID string) (InspectionView, error) {
 	if s.db == nil {
 		return InspectionView{}, apperror.New(apperror.CodeStoreOpenFailed, "task store unavailable: no open database")
 	}
-	store := tasks.New(s.db.DB())
+	taskStore := tasks.New(s.db.DB())
 	s.mu.Lock()
 	record := s.findRecordLocked(taskID)
 	if record == nil {
 		s.mu.Unlock()
-		return InspectionView{}, s.missingInspection(store, taskID)
+		return InspectionView{}, s.missingInspection(taskStore, taskID)
 	}
 	// The row read shares the lock with the record state so the view can
 	// never mix a finished payload with a pre-terminal row, or the reverse.
-	row, err := store.Get(context.Background(), taskID)
+	row, err := taskStore.Get(context.Background(), taskID)
 	if err != nil {
 		s.mu.Unlock()
 		return InspectionView{}, err
@@ -258,13 +258,13 @@ func (s *ApplicationService) CancelTask(taskID string) (tasks.Task, error) {
 	if s.db == nil {
 		return tasks.Task{}, apperror.New(apperror.CodeStoreOpenFailed, "task store unavailable: no open database")
 	}
-	store := tasks.New(s.db.DB())
+	taskStore := tasks.New(s.db.DB())
 
 	s.mu.Lock()
 	record := s.findRecordLocked(taskID)
 	if record == nil || !record.live {
 		s.mu.Unlock()
-		return tasks.Task{}, notCancellable(store, taskID)
+		return tasks.Task{}, notCancellable(taskStore, taskID)
 	}
 	record.cancelRequested = true
 	cancel := record.cancel
@@ -275,7 +275,7 @@ func (s *ApplicationService) CancelTask(taskID string) (tasks.Task, error) {
 	// The wait is outside the lock on purpose: the run needs the lock to
 	// write its terminal state, which is what closes done.
 	<-done
-	return store.Get(context.Background(), taskID)
+	return taskStore.Get(context.Background(), taskID)
 }
 
 // runInspection is the work behind one InspectArchive call. The row exists
@@ -288,7 +288,7 @@ func (s *ApplicationService) runInspection(record *inspectionRecord, path string
 	defer close(record.done)
 
 	ctx := context.Background()
-	store := tasks.New(s.db.DB())
+	taskStore := tasks.New(s.db.DB())
 	s.emit(EventTaskStarted, TaskEvent{TaskID: record.taskID, Operation: OperationInspectArchive, Message: startMessage})
 
 	// The limits come from the six settings keys, and a read failure fails
@@ -299,7 +299,7 @@ func (s *ApplicationService) runInspection(record *inspectionRecord, path string
 		s.finish(record, nil, failurePayload(err), "")
 		return
 	}
-	if err := store.UpdateProgress(ctx, record.taskID, 0, 0, startMessage); err != nil {
+	if err := taskStore.UpdateProgress(ctx, record.taskID, 0, 0, startMessage); err != nil {
 		s.finish(record, nil, failurePayload(err), "")
 		return
 	}
@@ -313,7 +313,7 @@ func (s *ApplicationService) runInspection(record *inspectionRecord, path string
 		// A progress write that fails is not retried: the row keeps the last
 		// state that did land, and the terminal write below is what the
 		// interface branches on.
-		_ = store.UpdateProgress(ctx, record.taskID, progress.Current, progress.Total, progress.Message)
+		_ = taskStore.UpdateProgress(ctx, record.taskID, progress.Current, progress.Total, progress.Message)
 		s.emit(EventTaskProgress, TaskEvent{
 			TaskID:    record.taskID,
 			Operation: OperationInspectArchive,
@@ -333,7 +333,7 @@ func (s *ApplicationService) runInspection(record *inspectionRecord, path string
 	// Scanning is indeterminate — internal/inspect streams nothing — so the
 	// row and the event both carry 0/0 with the phase message: a reloaded
 	// frontend renders the same state the live event showed.
-	_ = store.UpdateProgress(ctx, record.taskID, 0, 0, scanMessage)
+	_ = taskStore.UpdateProgress(ctx, record.taskID, 0, 0, scanMessage)
 	s.emit(EventTaskProgress, TaskEvent{TaskID: record.taskID, Operation: OperationInspectArchive, Message: scanMessage})
 
 	preview := &Preview{
@@ -342,7 +342,7 @@ func (s *ApplicationService) runInspection(record *inspectionRecord, path string
 		SizeBytes:     result.SizeBytes,
 		ArchiveSHA256: result.ArchiveSHA256,
 		PackageSHA256: result.PackageSHA256,
-		Preview:       inspect.Inspect(os.DirFS(stage), inspect.Options{CaseInsensitivePaths: caseInsensitivePaths()}),
+		Preview:       inspect.Inspect(os.DirFS(stage), inspect.Options{CaseInsensitivePaths: store.CaseInsensitivePaths()}),
 	}
 	s.finish(record, preview, nil, summaryOf(preview))
 }
@@ -355,7 +355,7 @@ func (s *ApplicationService) runInspection(record *inspectionRecord, path string
 // never overwrite a finished one, and the reverse cannot happen either.
 func (s *ApplicationService) finish(record *inspectionRecord, preview *Preview, failure *InspectionFailure, summary string) {
 	ctx := context.Background()
-	store := tasks.New(s.db.DB())
+	taskStore := tasks.New(s.db.DB())
 
 	s.mu.Lock()
 	cancelled := record.cancelRequested
@@ -368,11 +368,11 @@ func (s *ApplicationService) finish(record *inspectionRecord, preview *Preview, 
 	case cancelled:
 		// Best effort: a write that fails leaves the row running, which is
 		// the honest record of a terminal write that never landed.
-		_ = store.Cancel(ctx, record.taskID, cancelMessage)
+		_ = taskStore.Cancel(ctx, record.taskID, cancelMessage)
 	case failure != nil:
-		_ = store.Fail(ctx, record.taskID, apperror.Code(failure.Code), failure.Message)
+		_ = taskStore.Fail(ctx, record.taskID, apperror.Code(failure.Code), failure.Message)
 	default:
-		_ = store.Succeed(ctx, record.taskID, summary)
+		_ = taskStore.Succeed(ctx, record.taskID, summary)
 	}
 	s.mu.Unlock()
 
@@ -470,9 +470,18 @@ func failurePayload(err error) *InspectionFailure {
 
 // missingInspection reports INSPECTION_NOT_FOUND, naming what is actually
 // known about the id so the interface can show the expired state honestly.
-func (s *ApplicationService) missingInspection(store *tasks.Store, taskID string) error {
-	row, err := store.Get(context.Background(), taskID)
+// Only a genuine no-row answer means the inspection is gone: a driver or scan
+// failure is the store's problem, not the user's, and answering "no task row
+// carries it" would be a lie about a row that may exist perfectly well, so it
+// travels verbatim — exactly as the sibling notCancellable and Inspection's
+// live-record read propagate the same read.
+func (s *ApplicationService) missingInspection(taskStore *tasks.Store, taskID string) error {
+	row, err := taskStore.Get(context.Background(), taskID)
 	if err != nil {
+		var appErr *apperror.AppError
+		if !errors.As(err, &appErr) || appErr.Code != apperror.CodeTaskNotFound {
+			return err
+		}
 		return apperror.NewRecoverable(apperror.CodeInspectionNotFound,
 			fmt.Sprintf("no inspection %q", taskID),
 			fmt.Sprintf("inspection %q: this process has no record for the id, and no task row carries it", taskID))
@@ -489,8 +498,8 @@ func (s *ApplicationService) missingInspection(store *tasks.Store, taskID string
 
 // notCancellable reports TASK_NOT_FOUND for an id no row carries and
 // TASK_NOT_CANCELLABLE for a row that is not live in this process.
-func notCancellable(store *tasks.Store, taskID string) error {
-	row, err := store.Get(context.Background(), taskID)
+func notCancellable(taskStore *tasks.Store, taskID string) error {
+	row, err := taskStore.Get(context.Background(), taskID)
 	if err != nil {
 		return err
 	}
@@ -512,13 +521,6 @@ func viewStatus(status tasks.Status) string {
 	default:
 		return viewStatusRunning
 	}
-}
-
-// caseInsensitivePaths follows the host platform, where the extracted names
-// actually landed: Windows and macOS fold case, every other host does not.
-// It mirrors the comparison internal/store applies to paths.
-func caseInsensitivePaths() bool {
-	return runtime.GOOS == "windows" || runtime.GOOS == "darwin"
 }
 
 // emit hands one event to the sink. The sink is read under the lock but

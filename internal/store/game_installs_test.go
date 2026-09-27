@@ -142,6 +142,26 @@ func TestUpsertGameInstallCaseVariantPerOS(t *testing.T) {
 	}
 }
 
+// CaseInsensitivePaths is the documented host rule — Windows and macOS fold
+// case, every other host does not — and it is the single owner of that rule
+// for canonicalEqual and for the scanner option an inspection passes. GOOS is
+// not faked: the test asserts what this host reports, and a platform the rule
+// does not name fails rather than being assumed case-sensitive.
+func TestCaseInsensitivePathsFollowsTheHost(t *testing.T) {
+	var want bool
+	switch runtime.GOOS {
+	case "windows", "darwin":
+		want = true
+	case "aix", "android", "dragonfly", "freebsd", "illumos", "ios", "js", "linux", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "zos":
+		want = false
+	default:
+		t.Fatalf("unknown GOOS %q: extend the documented rule in CaseInsensitivePaths and this test", runtime.GOOS)
+	}
+	if got := CaseInsensitivePaths(); got != want {
+		t.Fatalf("CaseInsensitivePaths() = %v on %s, want %v", got, runtime.GOOS, want)
+	}
+}
+
 // Unknown sources pass through unread-but-preserved: no CHECK to trip on.
 func TestUpsertGameInstallPreservesUnknownSource(t *testing.T) {
 	paths, err := approot.ResolveWithBase(t.TempDir())

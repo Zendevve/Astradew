@@ -42,11 +42,17 @@ func CanonicalGamePath(p string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
+// CaseInsensitivePaths reports whether this host's filesystem folds case in
+// path lookups: Windows and macOS do, every other host does not. It is the
+// host rule behind canonicalEqual's comparison and behind the scanner option
+// an inspection passes, so the two cannot drift apart.
+func CaseInsensitivePaths() bool { return runtime.GOOS == "windows" || runtime.GOOS == "darwin" }
+
 // canonicalEqual reports whether two canonical paths name the same
 // directory: EqualFold on windows/darwin (case-insensitive filesystems),
 // strict == elsewhere (Linux stays exact).
 func canonicalEqual(a, b string) bool {
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+	if CaseInsensitivePaths() {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
