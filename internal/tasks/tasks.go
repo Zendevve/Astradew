@@ -8,8 +8,10 @@
 // path may depend on it; the re-read from SQLite is always the authority.
 //
 // Statuses are typed constants, never bare strings at call sites:
-// pending → running → succeeded | failed. Fail persists the typed error
-// CODE in outcome so the failure mode survives restarts as data.
+// pending → running → succeeded | failed | cancelled. Fail persists the
+// typed error CODE in outcome so the failure mode survives restarts as
+// data; Cancel records the human message and leaves outcome NULL, because
+// a cancellation has no error code and no result summary.
 package tasks
 
 import (
@@ -38,6 +40,12 @@ const (
 	// StatusFailed marks a finished record carrying the apperror code in
 	// outcome.
 	StatusFailed Status = "failed"
+	// StatusCancelled marks a record whose operation stopped because the
+	// caller cancelled it. It carries the cancellation message and leaves
+	// outcome NULL: neither an error code nor a result summary describes a
+	// stopped run. The column is free-form text, so this status needs no
+	// schema change.
+	StatusCancelled Status = "cancelled"
 )
 
 // DefaultListLimit bounds List when the caller passes no positive limit.
@@ -130,6 +138,19 @@ func (s *Store) Fail(ctx context.Context, id string, code apperror.Code, message
 		return fmt.Errorf("tasks: fail %q: %w", id, err)
 	}
 	return checkUpdated(res, id, "fail")
+}
+
+// Cancel finishes the record as cancelled with the human message and leaves
+// outcome NULL: a stopped run has neither a result summary nor an error
+// code, and storing an empty outcome would invent an empty summary. It
+// reports TASK_NOT_FOUND for an unknown id.
+func (s *Store) Cancel(ctx context.Context, id string, message string) error {
+	const query = `UPDATE tasks SET status = ?, message = ?, updated_at = ? WHERE id = ?`
+	res, err := s.db.ExecContext(ctx, query, string(StatusCancelled), message, time.Now().UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		return fmt.Errorf("tasks: cancel %q: %w", id, err)
+	}
+	return checkUpdated(res, id, "cancel")
 }
 
 // Get re-reads the record for id. An unknown id reports TASK_NOT_FOUND.

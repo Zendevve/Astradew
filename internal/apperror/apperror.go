@@ -137,6 +137,27 @@ const (
 	// permission denied, unexpected I/O). Recoverable: free space or fix
 	// permissions and retry. Details name the path and the OS error.
 	CodeInspectionFailed Code = "INSPECTION_FAILED"
+
+	// CodeInspectionBusy refuses a second archive inspection while one is
+	// already running: one inspection runs at a time, so two runs cannot
+	// contend for the same limits and temp root. Recoverable: wait for the
+	// running inspection to finish or cancel it, then retry. Details name
+	// the running task.
+	CodeInspectionBusy Code = "INSPECTION_BUSY"
+
+	// CodeInspectionNotFound refuses an inspection this process has no
+	// record for: an unknown id, a non-inspection task, an id whose
+	// in-memory record was evicted, or a row left behind by a previous app
+	// run (nothing about a preview is persisted this phase). Recoverable:
+	// start a new inspection. Details name the id and the reason.
+	CodeInspectionNotFound Code = "INSPECTION_NOT_FOUND"
+
+	// CodeTaskNotCancellable refuses a cancellation of a task that is not
+	// running in this process: already finished, already cancelled, or a
+	// stale running row from a previous app run. Recoverable: nothing to
+	// do — the row already says how the task ended. Details name the id and
+	// the current status.
+	CodeTaskNotCancellable Code = "TASK_NOT_CANCELLABLE"
 )
 
 // AppError is a typed service failure. It crosses to TypeScript as the cause

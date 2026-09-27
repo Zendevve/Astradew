@@ -37,6 +37,18 @@ export function AddGameInstall(path: string): $CancellablePromise<$models.GameIn
 }
 
 /**
+ * CancelTask cancels a live inspection: it cancels the run's context, waits
+ * for the goroutine to stop its work, mark the row cancelled, and remove its
+ * stage, and then returns the row. An unknown id reports TASK_NOT_FOUND; a
+ * row that is not live in this process — finished, already cancelled, or a
+ * stale running row from a previous app run — reports TASK_NOT_CANCELLABLE,
+ * because there is nothing here to stop.
+ */
+export function CancelTask(taskID: string): $CancellablePromise<tasks$0.Task> {
+    return $Call.ByID(290753921, taskID);
+}
+
+/**
  * DetectNow probes every enumerated candidate (Steam roots plus alternates,
  * GOG/default locations, the macOS standard bundle) through os.DirFS and
  * Detect, records every valid install, and resolves the pointer without
@@ -86,6 +98,31 @@ export function Info(): $CancellablePromise<$models.Info> {
 }
 
 /**
+ * InspectArchive records a task row for the chosen archive, starts the
+ * inspection, and returns the row immediately. Only one inspection runs at a
+ * time: a second call while one is live refuses with INSPECTION_BUSY and
+ * leaves no row behind, as does a service whose store or data layout is
+ * unusable. The row starts pending; the run moves it to running and then to
+ * succeeded, failed, or cancelled.
+ */
+export function InspectArchive(path: string): $CancellablePromise<tasks$0.Task> {
+    return $Call.ByID(2724760488, path);
+}
+
+/**
+ * Inspection returns the live state of one inspection. The status comes from
+ * the durable row — the truth a reloaded frontend re-reads — and the preview
+ * or failure payload comes from the in-memory record, because neither is
+ * persisted this phase. A task id this process holds no record for reports
+ * INSPECTION_NOT_FOUND: an unknown id, a non-inspection task, an evicted
+ * record, and a row left by a previous app run are all the same answer, and
+ * the frontend renders it as the expired state.
+ */
+export function Inspection(taskID: string): $CancellablePromise<$models.InspectionView> {
+    return $Call.ByID(4069372908, taskID);
+}
+
+/**
  * NoteLoggerCreated records the logger step. main.go calls it after creating
  * the logger, so Health never claims a step that did not run.
  */
@@ -119,6 +156,15 @@ export function ProbeFailure(): $CancellablePromise<$models.Info> {
  */
 export function RecentTasks(): $CancellablePromise<tasks$0.Task[] | null> {
     return $Call.ByID(391680125);
+}
+
+/**
+ * SetEventSink injects the sink task events are emitted through. main.go
+ * calls it once the Wails application exists; a service that never gets one
+ * runs identically, minus the hints.
+ */
+export function SetEventSink(sink: $models.EventSink): $CancellablePromise<void> {
+    return $Call.ByID(1133350273, sink);
 }
 
 /**

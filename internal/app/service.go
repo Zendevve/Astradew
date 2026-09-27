@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/Zendevve/astradew/internal/apperror"
 	"github.com/Zendevve/astradew/internal/approot"
@@ -35,6 +36,15 @@ type ApplicationService struct {
 	paths   approot.Paths
 	db      *store.Store
 	init    []InitStep
+
+	// mu guards the fields below and every in-memory inspection record, so a
+	// run's state and the row it mirrors are read and written consistently.
+	mu sync.Mutex
+	// sink is the Wails event sink main.go injects after the application
+	// exists; nil (tests, headless) means no hints are emitted.
+	sink EventSink
+	// inspections is the FIFO of recent inspections, oldest first.
+	inspections []*inspectionRecord
 }
 
 // New returns an ApplicationService reporting the given product name and

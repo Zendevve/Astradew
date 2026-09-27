@@ -32,6 +32,15 @@ export enum Status {
      * outcome.
      */
     StatusFailed = "failed",
+
+    /**
+     * StatusCancelled marks a record whose operation stopped because the
+     * caller cancelled it. It carries the cancellation message and leaves
+     * outcome NULL: neither an error code nor a result summary describes a
+     * stopped run. The column is free-form text, so this status needs no
+     * schema change.
+     */
+    StatusCancelled = "cancelled",
 };
 
 /**

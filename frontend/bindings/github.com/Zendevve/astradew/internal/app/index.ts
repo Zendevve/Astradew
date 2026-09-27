@@ -8,6 +8,7 @@ export {
 
 export type {
     DetectNowResult,
+    EventSink,
     GameInstallView,
     HealthDatabase,
     HealthDirectory,
@@ -18,5 +19,8 @@ export type {
     HealthUnavailable,
     Info,
     InitStep,
+    InspectionFailure,
+    InspectionView,
+    Preview,
     SettingView
 } from "./models.js";

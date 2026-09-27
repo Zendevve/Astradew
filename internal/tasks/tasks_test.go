@@ -153,6 +153,56 @@ func TestUnknownIDReportsTaskNotFound(t *testing.T) {
 	}
 }
 
+// Cancel must move the record to cancelled with the human message, leave
+// outcome NULL — there is no result and no error code to store — and still
+// say so after a reopen.
+func TestCancelRecordsStatusAndMessage(t *testing.T) {
+	ctx := context.Background()
+	paths, err := approot.ResolveWithBase(t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveWithBase() error = %v", err)
+	}
+	db := openStore(t, paths)
+	created, err := New(db.DB()).Create(ctx, "archive.inspect")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := New(db.DB()).UpdateProgress(ctx, created.ID, 4, 8, "extracting the archive"); err != nil {
+		t.Fatalf("UpdateProgress() error = %v", err)
+	}
+	if err := New(db.DB()).Cancel(ctx, created.ID, "cancelled by the user"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	got, err := New(reopen(t, paths, db).DB()).Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get() after reopen error = %v", err)
+	}
+	if got.Status != StatusCancelled {
+		t.Fatalf("Get() after reopen status = %q, want %q", got.Status, StatusCancelled)
+	}
+	if got.Message != "cancelled by the user" {
+		t.Fatalf("Get() after reopen message = %q, want %q", got.Message, "cancelled by the user")
+	}
+	if got.Outcome != nil {
+		t.Fatalf("Get() after reopen outcome = %q, want nil: a cancelled record carries no summary or code", *got.Outcome)
+	}
+}
+
+// Cancelling an unknown id reports TASK_NOT_FOUND, like every other write.
+func TestCancelUnknownIDReportsTaskNotFound(t *testing.T) {
+	ctx := context.Background()
+	paths, err := approot.ResolveWithBase(t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveWithBase() error = %v", err)
+	}
+	if err := New(openStore(t, paths).DB()).Cancel(ctx, "task-does-not-exist", "x"); err == nil {
+		t.Fatal("Cancel() unknown id error = nil, want TASK_NOT_FOUND")
+	} else {
+		taskNotFoundCode(t, err)
+	}
+}
+
 // List returns records newest-first and honours the limit; a
 // non-positive limit falls back to the sane default.
 func TestListOrderingAndLimit(t *testing.T) {

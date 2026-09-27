@@ -18,6 +18,7 @@ import (
 	"github.com/Zendevve/astradew/internal/app"
 	"github.com/Zendevve/astradew/internal/apperror"
 	"github.com/Zendevve/astradew/internal/approot"
+	"github.com/Zendevve/astradew/internal/archive"
 	"github.com/Zendevve/astradew/internal/buildinfo"
 	"github.com/Zendevve/astradew/internal/logging"
 	"github.com/Zendevve/astradew/internal/store"
@@ -101,6 +102,12 @@ func main() {
 		},
 	})
 
+	// Task events travel through this sink: Wails live hints only, never a
+	// correctness path (ADR 0006) — the durable task rows carry the same
+	// state and the interface re-reads them when it mounts. The sink exists
+	// only once the application does, so it is injected here rather than at
+	// construction.
+	svc.SetEventSink(astradew.Event)
 	astradew.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            buildinfo.Name,
 		Width:            1000,
@@ -108,8 +115,13 @@ func main() {
 		BackgroundColour: application.NewRGB(6, 7, 15),
 		URL:              "/",
 	})
-	if appLogger, err := logging.New(paths.Logs); err != nil {
-		log.Printf("logging: cannot create app logger: %v", err)
+	// The app logger is created while nothing has run yet: the window object
+	// exists but opens at Run, so every startup step below is recorded. A nil
+	// appLogger is the honest "it could not be created" of this block, and the
+	// sweep below still reports through the standard logger.
+	appLogger, loggerErr := logging.New(paths.Logs)
+	if loggerErr != nil {
+		log.Printf("logging: cannot create app logger: %v", loggerErr)
 	} else {
 		svc.NoteLoggerCreated()
 		defer func() { _ = appLogger.Close() }()
@@ -117,7 +129,38 @@ func main() {
 		appLogger.Info(ctx, "starting", "product", buildinfo.Name, "version", buildinfo.Version, "schema_version", db.Version(), "database", db.Path())
 	}
 
+	// A crash leaves its inspection stage behind, and the stage layout has
+	// exactly one owner (internal/archive). Sweeping before the window opens
+	// returns the space and means a leftover can never be mistaken for this
+	// run's stage.
+	sweepStages(paths.Temp, appLogger)
+
 	if err := astradew.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// sweepStages removes the inspection stages a previous run left behind: the
+// layout has exactly one owner (internal/archive), and a crash is the one
+// exit that cannot clean up after itself. It runs before the window opens, so
+// a leftover can never be mistaken for this run's stage, and it reports the
+// count through both the standard logger and — when it exists at this point —
+// the application logger. A sweep that fails is logged, never fatal: a stuck
+// stage is worth less than a startup that refuses to run.
+func sweepStages(tempRoot string, appLogger *logging.Logger) {
+	removed, err := archive.SweepStages(tempRoot)
+	if err != nil {
+		log.Printf("archive: swept %d leftover inspection stage(s), with errors: %v", removed, err)
+	} else {
+		log.Printf("archive: swept %d leftover inspection stage(s)", removed)
+	}
+	if appLogger == nil {
+		return
+	}
+	ctx := logging.WithOperationID(context.Background(), "startup")
+	if err != nil {
+		appLogger.Error(ctx, "inspection stage sweep incomplete", "stages_removed", removed, "error", err.Error())
+		return
+	}
+	appLogger.Info(ctx, "swept inspection stages", "stages_removed", removed)
 }
