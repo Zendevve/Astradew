@@ -10,6 +10,7 @@ import NavLink from "./ui/NavLink";
 import EmptyState from "./ui/EmptyState";
 import StatusText from "./ui/StatusText";
 import HealthSection from "./pages/HealthSection";
+import LibrarySection from "./pages/LibrarySection";
 import SettingsSection from "./pages/SettingsSection";
 import StartupTaskSection from "./pages/StartupTaskSection";
 import { ROUTES } from "./pages/routes";
@@ -174,6 +175,11 @@ export default function App() {
           <>
             <EmptyState title={active.heading} description={active.empty} />
             <SettingsSection />
+          </>
+        ) : active.path === "/library" ? (
+          <>
+            <EmptyState title={active.heading} description={active.empty} />
+            <LibrarySection />
           </>
         ) : active.path === "/" ? (
           <>

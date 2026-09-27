@@ -22,6 +22,9 @@ vi.mock("../../bindings/github.com/Zendevve/astradew/internal/app", () => ({
     AddGameInstall: vi.fn(),
     SetPrimaryGameInstall: vi.fn(),
     DetectNow: vi.fn(),
+    InspectArchive: vi.fn(),
+    Inspection: vi.fn(),
+    CancelTask: vi.fn(),
   },
 }));
 

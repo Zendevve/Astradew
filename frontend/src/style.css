@@ -182,6 +182,187 @@ body {
   color: var(--muted);
 }
 
+.library-import {
+  max-width: 44rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.library-import h2 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.library-import p {
+  margin: 0;
+}
+
+/* The sheet: a modal overlay whose panel is a labelled dialog. */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 4, 10, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 20;
+}
+
+.sheet {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem 1.5rem 1.5rem;
+  width: min(52rem, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, 0.5);
+}
+
+.sheet:focus-visible {
+  outline: 0.1875rem solid var(--focus);
+  outline-offset: 0.125rem;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.sheet-head h2 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.sheet-section {
+  border-top: 1px solid var(--border);
+  padding-top: 0.875rem;
+}
+
+.sheet-section h3 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+
+.sheet-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+.sheet-facts div {
+  display: contents;
+}
+
+.sheet-facts dt {
+  color: var(--muted);
+}
+
+.sheet-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+}
+
+.sheet-hint {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.sheet-outcome {
+  font-weight: 700;
+}
+
+.sheet-alert {
+  margin: 0;
+  font-weight: 700;
+}
+
+.sheet-details,
+.sheet-code {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.sheet-progress {
+  width: 100%;
+  height: 0.75rem;
+}
+
+.mod-unit {
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mod-unit h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.mod-unit h5 {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.mod-unit-kind {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.dependency-list,
+.field-error-list,
+.finding-list,
+.duplicate-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.finding-list,
+.duplicate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.finding-kind,
+.duplicate-id {
+  margin: 0;
+  font-weight: 700;
+}
+
+/* The backend's finding messages are the product copy verbatim, newlines and
+   all (the XNB explanation is two sentences on two lines). */
+.finding-message {
+  margin: 0;
+  white-space: pre-line;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
