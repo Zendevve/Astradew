@@ -8,7 +8,6 @@ export {
 
 export type {
     DetectNowResult,
-    EventSink,
     GameInstallView,
     HealthDatabase,
     HealthDirectory,

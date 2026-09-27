@@ -164,7 +164,10 @@ type inspectionRecord struct {
 
 // SetEventSink injects the sink task events are emitted through. main.go
 // calls it once the Wails application exists; a service that never gets one
-// runs identically, minus the hints.
+// runs identically, minus the hints. wails:ignore keeps it off the bound
+// surface: it is Go-side wiring, not something the page may call.
+//
+//wails:ignore
 func (s *ApplicationService) SetEventSink(sink EventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

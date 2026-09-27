@@ -26,13 +26,6 @@ export interface DetectNowResult {
 }
 
 /**
- * EventSink receives task event hints. *application.EventManager satisfies
- * it, and a nil sink (tests, headless runs) is valid by design: every
- * emission is best-effort and no correctness path depends on one (ADR 0006).
- */
-export type EventSink = any;
-
-/**
  * GameInstallView is one game_installs row plus its primary marker. Nullable
  * columns arrive as nil: null means present-but-unknown (versions) or
  * not-yet-detected/absent (entry point), never guessed.

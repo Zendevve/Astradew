@@ -159,15 +159,6 @@ export function RecentTasks(): $CancellablePromise<tasks$0.Task[] | null> {
 }
 
 /**
- * SetEventSink injects the sink task events are emitted through. main.go
- * calls it once the Wails application exists; a service that never gets one
- * runs identically, minus the hints.
- */
-export function SetEventSink(sink: $models.EventSink): $CancellablePromise<void> {
-    return $Call.ByID(1133350273, sink);
-}
-
-/**
  * SetPrimaryGameInstall points the primary at an existing row. An unknown id
  * refuses with recoverable SETTING_INVALID and the stored value is left
  * untouched. A nil store refuses with SETTING_UNAVAILABLE.
