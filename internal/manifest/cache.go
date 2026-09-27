@@ -104,7 +104,7 @@ func (c *Cache) unit(fsys fs.FS, name string) (*Unit, error) {
 	if err != nil {
 		return nil, err
 	}
-	unit := parseUnit(data)
+	unit := ParseUnit(data)
 	if before != nil {
 		c.remember(fsys, name, before, func(entry *cacheEntry) { entry.unit = unit })
 	}

@@ -502,13 +502,14 @@ func (s *scanner) readUnit(folder string, entries []fs.DirEntry) (*Unit, error) 
 	if err != nil {
 		return nil, err
 	}
-	return parseUnit(data), nil
+	return ParseUnit(data), nil
 }
 
-// parseUnit parses one manifest and marks system status. Marking happens here,
-// where the manifest is parsed, so a unit served from the cache carries the
-// same marking as one parsed fresh.
-func parseUnit(data []byte) *Unit {
+// ParseUnit parses one manifest and marks system status. It is the one place a
+// manifest becomes a Unit, so every caller — the scanner, the cache, and the
+// inspection layer's root pass — gets the same parsed detail and the same
+// system-mod marking, and no caller has to rebuild a Unit for itself.
+func ParseUnit(data []byte) *Unit {
 	m, verdict, errs := Parse(data)
 	return &Unit{Manifest: m, Verdict: verdict, Errors: errs, SystemMod: detect.IsBundledUniqueID(m.UniqueID)}
 }
@@ -731,6 +732,14 @@ var (
 	strictXnbExtensions    = map[string]bool{".xgs": true, ".xnb": true, ".xsb": true, ".xwb": true}
 	potentialXnbExtensions = map[string]bool{".json": true, ".yaml": true}
 )
+
+// IsStrictXnbExtension reports whether a file extension (with its dot, any
+// case) marks packed content: the files SMAPI cannot load and Astradew
+// diagnoses but never deploys. Exported so the inspection layer asks the
+// scanner's own set instead of keeping a second copy of it.
+func IsStrictXnbExtension(ext string) bool {
+	return strictXnbExtensions[strings.ToLower(ext)]
+}
 
 // xnbMod reports whether relevant files look like a legacy XNB mod: at least
 // one packed-content file, and nothing else but .json/.yaml.

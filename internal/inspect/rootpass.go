@@ -11,7 +11,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/Zendevve/astradew/internal/detect"
 	"github.com/Zendevve/astradew/internal/manifest"
 )
 
@@ -108,15 +107,11 @@ func inspectRoot(fsys fs.FS, opts Options) rootPass {
 			pass.unreadable = rootManifestFinding(name, err)
 			break
 		}
-		// The same three steps the scanner's parseUnit takes, so a root unit
-		// carries exactly what a scanned one does: parsed manifest, verdict,
-		// field errors, system status by Unique ID.
-		m, verdict, errs := manifest.Parse(data)
-		pass.unit = &manifest.Unit{
-			Manifest: m, Verdict: verdict, Errors: errs,
-			SystemMod: detect.IsBundledUniqueID(m.UniqueID),
-		}
-		pass.folderName = m.Name
+		// The scanner's own parse, so a root unit carries exactly what a
+		// scanned one does: parsed manifest, verdict, field errors, and
+		// system status by Unique ID.
+		pass.unit = manifest.ParseUnit(data)
+		pass.folderName = pass.unit.Manifest.Name
 	}
 	return pass
 }
@@ -179,20 +174,10 @@ func rootContentTreeFinding() Finding {
 func holdsStrictXnb(fsys fs.FS, dir string) bool {
 	found := false
 	walkBounded(fsys, dir, func(rel string) bool {
-		found = strictXnbExtension(path.Ext(rel))
+		found = manifest.IsStrictXnbExtension(path.Ext(rel))
 		return !found
 	})
 	return found
-}
-
-// strictXnbExtension reports the packed-content extensions, mirroring the
-// scanner's strict set.
-func strictXnbExtension(ext string) bool {
-	switch strings.ToLower(ext) {
-	case ".xgs", ".xnb", ".xsb", ".xwb":
-		return true
-	}
-	return false
 }
 
 // isDir reports whether an entry is a folder for traversal purposes: a real
